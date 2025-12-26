@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Music Score Viewer (Refactored)
 ===============================
@@ -12,6 +13,8 @@ Improvements in this version:
 
 Usage:
     python music_score_viewer.py [options]
+    OR (on Linux/Mac):
+    ./music_score_viewer.py [options]
 """
 
 import sys
@@ -664,7 +667,7 @@ class MusicScoreApp:
             y = oy + annot['y'] * h
             txt = annot['text']
             fam = annot.get('font', 'Arial')
-            sz = 12 + (annot.get('size', 2) * 4)
+            sz = int(12 + (annot.get('size', 2) * 4))
             
             if txt.strip() in MUSICAL_SYMBOLS_SET:
                 sz = int(sz * 6.0) # Massive scaling for music symbols
