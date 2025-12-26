@@ -1,0 +1,15 @@
+# Python temporary files
+__pycache__/
+*.py[cod]
+
+# PyInstaller build folders
+build/
+dist/
+*.spec
+
+# Logs
+*.log
+*.json
+
+# The executable itself (usually distributed via 'Releases', not code)
+*.exe
