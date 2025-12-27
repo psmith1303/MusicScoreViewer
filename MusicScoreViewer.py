@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Music Score Viewer (Refactored)
-===============================
+Music Score Viewer
+==================
+Version: 1.1c
 
 A robust Python application to view and annotate PDF music scores.
 
 Improvements in this version:
-1. Performance: Separated PDF rasterization from Vector drawing.
-2. Robustness: Atomic file saving to prevent JSON corruption.
-3. Data Integrity: Uses UUIDs for annotations instead of list indices.
-4. Precision: Eraser now deletes specific items rather than clearing the page.
+1. "Zoom to Fit": Ensures the full page is always visible (no cropping).
+2. Centering: Pages are centered in the window if aspect ratios differ.
+3. Performance: Separated PDF rasterization from Vector drawing.
+4. Robustness: Atomic file saving to prevent JSON corruption.
+5. Data Integrity: Uses UUIDs for annotations.
 
 Usage:
     python music_score_viewer.py [options]
@@ -30,6 +32,7 @@ import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
 
 # --- Constants & Config ---
+APP_VERSION = "1.1c"
 ANNOTATION_VERSION = 2
 DEFAULT_WIN_SIZE = "1200x900"
 BG_COLOR = "#333333"
@@ -46,7 +49,7 @@ MUSICAL_SYMBOLS_SET = {
 # --- Parsing Command Line Arguments ---
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="Music Score Viewer: Robust PDF viewer and annotator.",
+        description=f"Music Score Viewer v{APP_VERSION}: Robust PDF viewer and annotator.",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Show informational messages.")
@@ -287,7 +290,7 @@ class CompactTagFrame(tk.Frame):
 class MusicScoreApp:
     def __init__(self, root, start_dir=None, sort_by_title=False):
         self.root = root
-        self.root.title("Music Score Viewer")
+        self.root.title(f"Music Score Viewer v{APP_VERSION}")
         self.root.geometry(DEFAULT_WIN_SIZE)
         self._maximize()
 
@@ -578,61 +581,87 @@ class MusicScoreApp:
         data = {"version": ANNOTATION_VERSION, "pages": self.annotations}
         SafeJSON.save(base, data)
 
-    # --- Graphics Logic (The Core Optimization) ---
+    # --- Graphics Logic (Render & Center) ---
 
     def _render_pdf(self):
         """Rasterizes PDF pages to background image. Called on resize/nav."""
         if not self.doc: return
         
         # 1. Calc Dimensions
-        w = self.canvas.winfo_width()
-        h = self.canvas.winfo_height()
-        if w < 10: w, h = 1200, 850 # Fallback
+        win_w = self.canvas.winfo_width()
+        win_h = self.canvas.winfo_height()
+        if win_w < 10: win_w, win_h = 1200, 850 # Fallback
 
         p1 = self.doc.load_page(self.current_page)
-        r1 = p1.rect
-        zoom = h / r1.height
+        r1 = p1.rect # w, h
         
-        # Check Side-by-Side
+        # Determine "Fit Height" Zoom
+        zoom_fit_h = win_h / r1.height
         sep = 4
-        w_needed = (r1.width * zoom * 2) + sep
-        self.is_two_page = (w_needed <= w and self.current_page + 1 < self.total_pages)
+        
+        # Check Side-by-Side feasibility
+        width_two_pages = (r1.width * zoom_fit_h * 2) + sep
+        self.is_two_page = (width_two_pages <= win_w and self.current_page + 1 < self.total_pages)
         
         self.page_layout = [] # Reset layout map
 
         # 2. Render Pixmaps (CPU Heavy)
-        mat = fitz.Matrix(zoom, zoom)
-        pix1 = p1.get_pixmap(matrix=mat)
-        
         if self.is_two_page:
+            # We assume fit-height is best for 2 pages if they fit
+            zoom = zoom_fit_h
+            
+            mat = fitz.Matrix(zoom, zoom)
+            pix1 = p1.get_pixmap(matrix=mat)
+            
             p2 = self.doc.load_page(self.current_page + 1)
             pix2 = p2.get_pixmap(matrix=mat)
             
             # Composite using PIL
             total_w = pix1.width + pix2.width + sep
             max_h = max(pix1.height, pix2.height)
-            img = Image.new("RGB", (total_w, max_h), (0,0,0))
             
+            # Calculate Centering Offsets
+            x_off = (win_w - total_w) // 2
+            y_off = (win_h - max_h) // 2
+            
+            img = Image.new("RGB", (total_w, max_h), (0,0,0))
             im1 = Image.frombytes("RGB", [pix1.width, pix1.height], pix1.samples)
             im2 = Image.frombytes("RGB", [pix2.width, pix2.height], pix2.samples)
             img.paste(im1, (0,0))
             img.paste(im2, (pix1.width + sep, 0))
             
             self.page_layout = [
-                {"p": self.current_page, "x": 0, "y": 0, "w": pix1.width, "h": pix1.height},
-                {"p": self.current_page+1, "x": pix1.width+sep, "y": 0, "w": pix2.width, "h": pix2.height}
+                {"p": self.current_page, "x": x_off, "y": y_off, "w": pix1.width, "h": pix1.height},
+                {"p": self.current_page+1, "x": x_off + pix1.width + sep, "y": y_off, "w": pix2.width, "h": pix2.height}
             ]
-        else:
-            img = Image.frombytes("RGB", [pix1.width, pix1.height], pix1.samples)
-            self.page_layout = [
-                {"p": self.current_page, "x": 0, "y": 0, "w": pix1.width, "h": pix1.height}
-            ]
+            
+            # Create centered image
+            self.tk_image = ImageTk.PhotoImage(img)
+            self.canvas.delete("all") 
+            self.canvas.create_image(x_off, y_off, image=self.tk_image, anchor="nw", tags="bg")
 
-        # 3. Update Canvas Background
-        self.tk_image = ImageTk.PhotoImage(img)
-        self.canvas.delete("all") 
-        self.canvas.create_image(0, 0, image=self.tk_image, anchor="nw", tags="bg")
-        
+        else:
+            # Single Page: Calculate "Best Fit" (Min of Width or Height)
+            zoom_w = win_w / r1.width
+            zoom_h = win_h / r1.height
+            zoom = min(zoom_w, zoom_h)
+            
+            mat = fitz.Matrix(zoom, zoom)
+            pix1 = p1.get_pixmap(matrix=mat)
+            img = Image.frombytes("RGB", [pix1.width, pix1.height], pix1.samples)
+            
+            # Calculate Centering Offsets
+            x_off = (win_w - pix1.width) // 2
+            y_off = (win_h - pix1.height) // 2
+            
+            self.page_layout = [
+                {"p": self.current_page, "x": x_off, "y": y_off, "w": pix1.width, "h": pix1.height}
+            ]
+            
+            self.tk_image = ImageTk.PhotoImage(img)
+            self.canvas.delete("all") 
+            self.canvas.create_image(x_off, y_off, image=self.tk_image, anchor="nw", tags="bg")
+
         # 4. Draw Annotations (Vector)
         self._draw_vectors()
 
@@ -667,7 +696,7 @@ class MusicScoreApp:
             y = oy + annot['y'] * h
             txt = annot['text']
             fam = annot.get('font', 'Arial')
-            sz = int(12 + (annot.get('size', 2) * 4))
+            sz = 12 + (annot.get('size', 2) * 4)
             
             if txt.strip() in MUSICAL_SYMBOLS_SET:
                 sz = int(sz * 6.0) # Massive scaling for music symbols
