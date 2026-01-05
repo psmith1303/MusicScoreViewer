@@ -2,14 +2,15 @@
 """
 Music Score Viewer
 ==================
-Version: 1.2
+Version: 1.4 (Performance Update)
 
 A robust Python application to view and annotate PDF music scores.
 
-Changes in v1.2:
-1. Column Sorting: Click headers to sort (Composer, Title, Tags).
-2. UI: Added "Clear Composer" button (×).
-3. Shortcuts: Ctrl+F (Search), Alt+C (Composer), Alt+R (Reset).
+Changes in v1.4:
+1. Performance: Implemented LRU Caching to store rendered pages in RAM.
+2. Performance: Added "Look-ahead" pre-loading. The app renders the next page
+   during idle time, making page turns instant.
+3. Optimization: Cache is automatically cleared on window resize to prevent memory bloat.
 
 Usage:
     python music_score_viewer.py [options]
@@ -26,13 +27,15 @@ import shutil
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
+from collections import OrderedDict
 
 # --- Constants & Config ---
-APP_VERSION = "1.2"
+APP_VERSION = "1.4"
 ANNOTATION_VERSION = 2
 DEFAULT_WIN_SIZE = "1200x900"
 BG_COLOR = "#333333"
 TOOLBAR_COLOR = "#e0e0e0"
+CACHE_SIZE = 20  # Number of page images to keep in RAM
 
 MUSICAL_SYMBOLS_SET = {
     "\U0001D15E", "♩", "♩.", "♪", 
@@ -50,7 +53,6 @@ def parse_arguments():
     parser.add_argument("-D", "--debug", action="store_true", help="Show debug messages.")
     parser.add_argument("-l", "--log-file", type=str, help="Path to a log file.")
     parser.add_argument("-d", "--dir", type=str, help="Open directory on startup.")
-    # Note: --title-first removed as it's superseded by UI sorting
     
     args, unknown = parser.parse_known_args()
     return args
@@ -87,6 +89,31 @@ except ImportError:
 
 
 # --- Helper Classes ---
+
+class RenderCache:
+    """
+    A Least-Recently-Used (LRU) cache for rendered PDF images.
+    Stores: (ImageTk.PhotoImage, PageLayoutList, IsTwoPage)
+    Key: (PageNumber, WindowWidth, WindowHeight)
+    """
+    def __init__(self, capacity=CACHE_SIZE):
+        self.cache = OrderedDict()
+        self.capacity = capacity
+
+    def get(self, key):
+        if key not in self.cache:
+            return None
+        self.cache.move_to_end(key) # Mark as recently used
+        return self.cache[key]
+
+    def put(self, key, value):
+        self.cache[key] = value
+        self.cache.move_to_end(key)
+        if len(self.cache) > self.capacity:
+            self.cache.popitem(last=False) # Remove oldest
+
+    def clear(self):
+        self.cache.clear()
 
 class SafeJSON:
     @staticmethod
@@ -246,7 +273,6 @@ class MusicScoreApp:
         self.root.geometry(DEFAULT_WIN_SIZE)
         self._maximize()
 
-        # Data State
         self.scores = []
         self.doc = None
         self.current_score_path = None
@@ -254,12 +280,15 @@ class MusicScoreApp:
         self.total_pages = 0
         self.tk_image = None
         
-        # Sort State
-        self.sort_col = "composer" # Default sort
-        self.sort_desc = False     # Ascending
+        self.sort_col = "composer"
+        self.sort_desc = False
         
         self.start_dir = start_dir
         self.ignore_events = False
+        
+        # Cache & Performance
+        self.render_cache = RenderCache(CACHE_SIZE)
+        self.prefetch_job = None
         
         self.is_two_page = False
         self.page_layout = [] 
@@ -269,7 +298,6 @@ class MusicScoreApp:
         self.pen_color = "black"
         self.current_stroke = []
 
-        # UI
         style = ttk.Style()
         style.configure("Treeview", rowheight=25)
         
@@ -296,7 +324,6 @@ class MusicScoreApp:
     # --- UI Setup ---
 
     def _setup_selection_ui(self):
-        # 1. Top Controls
         top = tk.Frame(self.f_select, padx=10, pady=10)
         top.pack(fill=tk.X)
         
@@ -308,7 +335,6 @@ class MusicScoreApp:
         tk.Button(top, text="Folder", command=self._prompt_dir).pack(side=tk.RIGHT, padx=5)
         tk.Button(top, text="Reset (Alt+R)", command=self._reset_filters).pack(side=tk.RIGHT)
 
-        # 2. Filters
         mid = tk.Frame(self.f_select, padx=10, pady=5, height=200)
         mid.pack(fill=tk.X)
         mid.pack_propagate(False)
@@ -316,7 +342,6 @@ class MusicScoreApp:
         f_comp = tk.LabelFrame(mid, text="Composer (Alt+C)")
         f_comp.pack(side=tk.LEFT, fill=tk.Y, padx=(0,10))
         
-        # Composer Row with Clear Button
         f_comp_row = tk.Frame(f_comp)
         f_comp_row.pack(fill=tk.X, padx=5, pady=5)
         
@@ -324,20 +349,15 @@ class MusicScoreApp:
         self.cb_comp.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.cb_comp.bind("<<ComboboxSelected>>", self._on_filter)
         
-        # Clear Composer Button (Improvement #2)
-        btn_clr_comp = tk.Button(f_comp_row, text="×", width=2, command=self._clear_composer_filter, relief="flat", bg="#ddd")
-        btn_clr_comp.pack(side=tk.LEFT, padx=(2,0))
+        tk.Button(f_comp_row, text="×", width=2, command=self._clear_composer_filter, relief="flat", bg="#ddd").pack(side=tk.LEFT, padx=(2,0))
 
         f_tags = tk.LabelFrame(mid, text="Tags")
         f_tags.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.tag_grid = CompactTagFrame(f_tags, callback=self._on_filter)
         self.tag_grid.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # 3. List
         cols = ("composer", "title", "tags")
         self.tree = ttk.Treeview(self.f_select, columns=cols, show="headings")
-        
-        # Improvement #1: Clickable Headers for Sorting
         for c in cols: 
             self.tree.heading(c, text=c.capitalize(), command=lambda col=c: self._on_header_click(col))
         
@@ -350,8 +370,6 @@ class MusicScoreApp:
         
         self.tree.bind("<Double-1>", self._on_open)
         self.tree.bind("<Return>", self._on_open)
-        
-        # Initial Sort Indicator
         self._update_headers()
 
     def _setup_display_ui(self):
@@ -378,10 +396,14 @@ class MusicScoreApp:
         self.sc_size.set(2)
         self.sc_size.pack(side=tk.LEFT, padx=5)
 
-        self.lbl_status = tk.Label(tb, text="Mode: Nav", bg=TOOLBAR_COLOR, font=("Arial", 10, "bold"))
-        self.lbl_status.pack(side=tk.RIGHT, padx=10)
         self.lbl_col_ind = tk.Label(tb, width=3, bg="black")
         self.lbl_col_ind.pack(side=tk.RIGHT, padx=5)
+        
+        self.lbl_status = tk.Label(tb, text="Mode: Nav", bg=TOOLBAR_COLOR, font=("Arial", 10, "bold"))
+        self.lbl_status.pack(side=tk.RIGHT, padx=10)
+
+        self.lbl_page_info = tk.Label(tb, text="Page: -/-", bg=TOOLBAR_COLOR, font=("Arial", 10))
+        self.lbl_page_info.pack(side=tk.RIGHT, padx=10)
 
         self.canvas = tk.Canvas(self.f_display, bg=BG_COLOR, highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
@@ -398,7 +420,6 @@ class MusicScoreApp:
         self.root.bind("<Home>", lambda e: self._goto_page(0))
         self.root.bind("<End>", lambda e: self._goto_page(self.total_pages - 1))
         
-        # Improvement #3: Shortcuts
         self.root.bind("<Control-f>", lambda e: self.ent_search.focus_set())
         self.root.bind("<Alt-c>", lambda e: self.cb_comp.focus_set())
         self.root.bind("<Alt-r>", lambda e: self._reset_filters())
@@ -464,7 +485,6 @@ class MusicScoreApp:
         if comp == "All Composers": comp = ""
         tags = set() if reset_tags else self.tag_grid.get_selected()
 
-        # 1. Filter
         matches = []
         for s in self.scores:
             if txt and txt not in s.title.lower(): continue
@@ -472,7 +492,6 @@ class MusicScoreApp:
             if not tags.issubset(s.tags): continue
             matches.append(s)
 
-        # 2. Sort (Applied dynamically based on header state)
         key_map = {
             'composer': lambda s: (s.composer.lower(), s.title.lower()),
             'title': lambda s: (s.title.lower(), s.composer.lower()),
@@ -481,13 +500,11 @@ class MusicScoreApp:
         if self.sort_col in key_map:
             matches.sort(key=key_map[self.sort_col], reverse=self.sort_desc)
 
-        # 3. Update List
         for x in self.tree.get_children(): self.tree.delete(x)
         for s in matches:
             t_str = ", ".join(sorted(list(s.tags), key=str.lower))
             self.tree.insert("", tk.END, values=(s.composer, s.title, t_str), iid=s.filepath)
 
-        # 4. Update Facets
         av_comps = set()
         av_tags = set()
         for s in self.scores:
@@ -516,6 +533,7 @@ class MusicScoreApp:
             self.current_score_path = path
             self.total_pages = self.doc.page_count
             self.current_page = 0
+            self.render_cache.clear() # Reset cache for new doc
             
             base = os.path.splitext(path)[0] + ".json"
             raw = SafeJSON.load(base)
@@ -549,6 +567,7 @@ class MusicScoreApp:
             self.f_display.pack_forget()
             self.f_select.pack(fill=tk.BOTH, expand=True)
             self.doc = None
+            self.render_cache.clear()
         else:
             self.f_select.pack_forget()
             self.f_display.pack(fill=tk.BOTH, expand=True)
@@ -565,28 +584,21 @@ class MusicScoreApp:
 
     # --- Graphics Logic ---
 
-    def _render_pdf(self):
-        if not self.doc: return
-        
-        win_w = self.canvas.winfo_width()
-        win_h = self.canvas.winfo_height()
-        if win_w < 10: win_w, win_h = 1200, 850
-
-        p1 = self.doc.load_page(self.current_page)
+    def _generate_page_image(self, page_num, win_w, win_h):
+        """Generates the image and layout for a single or double page view. Returns (ImageTk, Layout, IsTwoPage)"""
+        p1 = self.doc.load_page(page_num)
         r1 = p1.rect
         zoom_fit_h = win_h / r1.height
         sep = 4
         
         width_two_pages = (r1.width * zoom_fit_h * 2) + sep
-        self.is_two_page = (width_two_pages <= win_w and self.current_page + 1 < self.total_pages)
-        self.page_layout = [] 
-
-        if self.is_two_page:
+        is_two_page = (width_two_pages <= win_w and page_num + 1 < self.total_pages)
+        
+        if is_two_page:
             zoom = zoom_fit_h
             mat = fitz.Matrix(zoom, zoom)
             pix1 = p1.get_pixmap(matrix=mat)
-            
-            p2 = self.doc.load_page(self.current_page + 1)
+            p2 = self.doc.load_page(page_num + 1)
             pix2 = p2.get_pixmap(matrix=mat)
             
             total_w = pix1.width + pix2.width + sep
@@ -601,15 +613,13 @@ class MusicScoreApp:
             img.paste(im1, (0,0))
             img.paste(im2, (pix1.width + sep, 0))
             
-            self.page_layout = [
-                {"p": self.current_page, "x": x_off, "y": y_off, "w": pix1.width, "h": pix1.height},
-                {"p": self.current_page+1, "x": x_off + pix1.width + sep, "y": y_off, "w": pix2.width, "h": pix2.height}
+            layout = [
+                {"p": page_num, "x": x_off, "y": y_off, "w": pix1.width, "h": pix1.height},
+                {"p": page_num+1, "x": x_off + pix1.width + sep, "y": y_off, "w": pix2.width, "h": pix2.height}
             ]
-            self.tk_image = ImageTk.PhotoImage(img)
-            self.canvas.delete("all") 
-            self.canvas.create_image(x_off, y_off, image=self.tk_image, anchor="nw", tags="bg")
-
+            return ImageTk.PhotoImage(img), layout, True
         else:
+            # Single Page Logic
             zoom_w = win_w / r1.width
             zoom_h = win_h / r1.height
             zoom = min(zoom_w, zoom_h)
@@ -620,12 +630,65 @@ class MusicScoreApp:
             x_off = (win_w - pix1.width) // 2
             y_off = (win_h - pix1.height) // 2
             
-            self.page_layout = [{"p": self.current_page, "x": x_off, "y": y_off, "w": pix1.width, "h": pix1.height}]
-            self.tk_image = ImageTk.PhotoImage(img)
-            self.canvas.delete("all") 
-            self.canvas.create_image(x_off, y_off, image=self.tk_image, anchor="nw", tags="bg")
+            layout = [{"p": page_num, "x": x_off, "y": y_off, "w": pix1.width, "h": pix1.height}]
+            return ImageTk.PhotoImage(img), layout, False
+
+    def _render_pdf(self):
+        if not self.doc: return
+        
+        # Current dimensions
+        win_w = self.canvas.winfo_width()
+        win_h = self.canvas.winfo_height()
+        if win_w < 10: win_w, win_h = 1200, 850
+
+        # Check Cache
+        cache_key = (self.current_page, win_w, win_h)
+        cached_data = self.render_cache.get(cache_key)
+
+        if cached_data:
+            self.tk_image, self.page_layout, self.is_two_page = cached_data
+        else:
+            # Render and cache
+            self.tk_image, self.page_layout, self.is_two_page = self._generate_page_image(self.current_page, win_w, win_h)
+            self.render_cache.put(cache_key, (self.tk_image, self.page_layout, self.is_two_page))
+
+        # Update Canvas
+        layout_0 = self.page_layout[0]
+        # x_off/y_off are stored in layout
+        bg_x, bg_y = layout_0['x'], layout_0['y']
+        
+        self.canvas.delete("all") 
+        self.canvas.create_image(bg_x, bg_y, image=self.tk_image, anchor="nw", tags="bg")
+        
+        # Update Info
+        if self.is_two_page:
+            p_text = f"Page {self.current_page + 1}-{self.current_page + 2} / {self.total_pages}"
+        else:
+            p_text = f"Page {self.current_page + 1} / {self.total_pages}"
+        self.lbl_page_info.config(text=p_text)
 
         self._draw_vectors()
+        
+        # Trigger Pre-load of next page (Lookahead)
+        if self.prefetch_job:
+            self.root.after_cancel(self.prefetch_job)
+        self.prefetch_job = self.root.after(200, lambda: self._preload_next(win_w, win_h))
+
+    def _preload_next(self, win_w, win_h):
+        """Renders the next logical view into the cache during idle time."""
+        if not self.doc: return
+        
+        step = 2 if self.is_two_page else 1
+        next_pg = self.current_page + step
+        
+        if next_pg < self.total_pages:
+            cache_key = (next_pg, win_w, win_h)
+            if not self.render_cache.get(cache_key):
+                # logging.debug(f"Pre-loading page {next_pg}")
+                try:
+                    data = self._generate_page_image(next_pg, win_w, win_h)
+                    self.render_cache.put(cache_key, data)
+                except Exception: pass
 
     def _draw_vectors(self):
         self.canvas.delete("annot") 
@@ -760,7 +823,10 @@ class MusicScoreApp:
         self._draw_vectors()
 
     def _on_resize(self, event):
-        if self.doc: self._render_pdf()
+        # On resize, layout invalidates, clear cache
+        if self.doc: 
+            self.render_cache.clear()
+            self._render_pdf()
 
     def _goto_page(self, p):
         if self.doc and 0 <= p < self.total_pages:
