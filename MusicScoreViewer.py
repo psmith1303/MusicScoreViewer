@@ -2,15 +2,12 @@
 """
 Music Score Viewer
 ==================
-Version: 1.3
+Version: 1.3.1
 
 A robust Python application to view and annotate PDF music scores.
 
-Features:
-- View: Zoom-to-fit, Side-by-side mode, Centered rendering.
-- Organize: Recursive scan, Faceted search (Composer/Tags), Column sorting.
-- Annotate: Pen, Text (with Music Symbols), Eraser.
-- Data: Atomic saving, UUID-based tracking, JSON storage.
+Changes in v1.3.1:
+1. Fix: Added Page Number indicator to the toolbar (displays single or dual page range).
 
 Usage:
     python music_score_viewer.py [options]
@@ -31,7 +28,7 @@ import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
 
 # --- Constants & Config ---
-APP_VERSION = "1.3"
+APP_VERSION = "1.3.1"
 ANNOTATION_VERSION = 2
 DEFAULT_WIN_SIZE = "1200x900"
 BG_COLOR = "#333333"
@@ -91,7 +88,6 @@ except ImportError:
 # --- Helper Classes ---
 
 class SafeJSON:
-    """Handles Atomic writes to prevent data corruption."""
     @staticmethod
     def load(filepath):
         if not os.path.exists(filepath): return {}
@@ -116,7 +112,6 @@ class SafeJSON:
                 os.remove(tmp_name)
 
 class TextEntryDialog(tk.Toplevel):
-    """Modal dialog for adding/editing text annotations."""
     def __init__(self, parent, title="Add Text", initial_color="black", initial_text="", initial_font="New Century Schoolbook"):
         super().__init__(parent)
         self.transient(parent)
@@ -186,7 +181,6 @@ class TextEntryDialog(tk.Toplevel):
         self.destroy()
 
 class Score:
-    """Data class for a music score file."""
     __slots__ = ['filepath', 'filename', 'composer', 'title', 'tags']
     def __init__(self, filepath, filename, folder_tags=None):
         self.filepath = filepath
@@ -213,7 +207,6 @@ class Score:
         except Exception: pass
 
 class CompactTagFrame(tk.Frame):
-    """Grid of checkboxes for tags."""
     def __init__(self, master, callback, **kwargs):
         super().__init__(master, **kwargs)
         self.callback = callback
@@ -372,8 +365,13 @@ class MusicScoreApp:
         self.sc_size.set(2)
         self.sc_size.pack(side=tk.LEFT, padx=5)
 
+        # Right side status group
+        self.lbl_page = tk.Label(tb, text="Page: -", bg=TOOLBAR_COLOR, font=("Arial", 10))
+        self.lbl_page.pack(side=tk.RIGHT, padx=10)
+
         self.lbl_status = tk.Label(tb, text="Mode: Nav", bg=TOOLBAR_COLOR, font=("Arial", 10, "bold"))
         self.lbl_status.pack(side=tk.RIGHT, padx=10)
+        
         self.lbl_col_ind = tk.Label(tb, width=3, bg="black")
         self.lbl_col_ind.pack(side=tk.RIGHT, padx=5)
 
@@ -609,6 +607,9 @@ class MusicScoreApp:
             self.tk_image = ImageTk.PhotoImage(img)
             self.canvas.delete("all") 
             self.canvas.create_image(x_off, y_off, image=self.tk_image, anchor="nw", tags="bg")
+            
+            # Update Page Label (Two Page)
+            self.lbl_page.config(text=f"Page: {self.current_page + 1}-{self.current_page + 2} / {self.total_pages}")
 
         else:
             zoom_w = win_w / r1.width
@@ -625,6 +626,9 @@ class MusicScoreApp:
             self.tk_image = ImageTk.PhotoImage(img)
             self.canvas.delete("all") 
             self.canvas.create_image(x_off, y_off, image=self.tk_image, anchor="nw", tags="bg")
+            
+            # Update Page Label (Single Page)
+            self.lbl_page.config(text=f"Page: {self.current_page + 1} / {self.total_pages}")
 
         self._draw_vectors()
 
