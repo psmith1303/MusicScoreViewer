@@ -2,17 +2,17 @@
 """
 Music Score Viewer
 ==================
-Version: 1.3.1
+Version: 1.3.2
 
 A robust Python application to view and annotate PDF music scores.
 
-Changes in v1.3.1:
-1. Fix: Added Page Number indicator to the toolbar (displays single or dual page range).
+Changes in v1.3.2:
+1. CRITICAL FIX: Removed spline smoothing from Pen tool which caused the app to hang.
+2. Robustness: Switched to os.replace for safer atomic file saving on Windows.
+3. Display: Page numbers now correctly display in the toolbar.
 
 Usage:
     python music_score_viewer.py [options]
-    OR (on Linux/Mac):
-    ./music_score_viewer.py [options]
 """
 
 import sys
@@ -22,13 +22,12 @@ import logging
 import argparse
 import uuid
 import tempfile
-import shutil
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
 
 # --- Constants & Config ---
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 ANNOTATION_VERSION = 2
 DEFAULT_WIN_SIZE = "1200x900"
 BG_COLOR = "#333333"
@@ -88,6 +87,7 @@ except ImportError:
 # --- Helper Classes ---
 
 class SafeJSON:
+    """Handles Atomic writes to prevent data corruption."""
     @staticmethod
     def load(filepath):
         if not os.path.exists(filepath): return {}
@@ -100,12 +100,16 @@ class SafeJSON:
 
     @staticmethod
     def save(filepath, data):
+        """Atomic save using os.replace which handles Windows file locking better."""
         dir_name = os.path.dirname(filepath)
         try:
-            with tempfile.NamedTemporaryFile('w', dir=dir_name, delete=False, encoding='utf-8') as tmp:
-                json.dump(data, tmp, indent=2)
-                tmp_name = tmp.name
-            shutil.move(tmp_name, filepath)
+            # Create temp file in same dir to ensure same filesystem
+            fd, tmp_name = tempfile.mkstemp(dir=dir_name, text=True)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            
+            # Atomic replacement
+            os.replace(tmp_name, filepath)
         except Exception as e:
             logging.error(f"Failed to save JSON atomically: {e}")
             if 'tmp_name' in locals() and os.path.exists(tmp_name):
@@ -157,6 +161,8 @@ class TextEntryDialog(tk.Toplevel):
 
         r, c = 0, 0
         MAX_COLS = 5
+        btn_f = tkfont.Font(family="Times New Roman", size=14, weight="bold")
+
         for name, char in symbols:
             display = "𝅗𝅥" if "Minim" in name else char
             is_dyn = len(char) > 1 and char[0] in "mpf"
@@ -295,7 +301,6 @@ class MusicScoreApp:
     # --- UI Setup ---
 
     def _setup_selection_ui(self):
-        # 1. Top Controls
         top = tk.Frame(self.f_select, padx=10, pady=10)
         top.pack(fill=tk.X)
         tk.Label(top, text="Search (Ctrl+F):").pack(side=tk.LEFT)
@@ -305,7 +310,6 @@ class MusicScoreApp:
         tk.Button(top, text="Folder", command=self._prompt_dir).pack(side=tk.RIGHT, padx=5)
         tk.Button(top, text="Reset (Alt+R)", command=self._reset_filters).pack(side=tk.RIGHT)
 
-        # 2. Filters
         mid = tk.Frame(self.f_select, padx=10, pady=5, height=200)
         mid.pack(fill=tk.X)
         mid.pack_propagate(False)
@@ -325,7 +329,6 @@ class MusicScoreApp:
         self.tag_grid = CompactTagFrame(f_tags, callback=self._on_filter)
         self.tag_grid.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # 3. List
         cols = ("composer", "title", "tags")
         self.tree = ttk.Treeview(self.f_select, columns=cols, show="headings")
         for c in cols: 
@@ -365,13 +368,11 @@ class MusicScoreApp:
         self.sc_size.set(2)
         self.sc_size.pack(side=tk.LEFT, padx=5)
 
-        # Right side status group
         self.lbl_page = tk.Label(tb, text="Page: -", bg=TOOLBAR_COLOR, font=("Arial", 10))
         self.lbl_page.pack(side=tk.RIGHT, padx=10)
 
         self.lbl_status = tk.Label(tb, text="Mode: Nav", bg=TOOLBAR_COLOR, font=("Arial", 10, "bold"))
         self.lbl_status.pack(side=tk.RIGHT, padx=10)
-        
         self.lbl_col_ind = tk.Label(tb, width=3, bg="black")
         self.lbl_col_ind.pack(side=tk.RIGHT, padx=5)
 
@@ -608,7 +609,6 @@ class MusicScoreApp:
             self.canvas.delete("all") 
             self.canvas.create_image(x_off, y_off, image=self.tk_image, anchor="nw", tags="bg")
             
-            # Update Page Label (Two Page)
             self.lbl_page.config(text=f"Page: {self.current_page + 1}-{self.current_page + 2} / {self.total_pages}")
 
         else:
@@ -627,7 +627,6 @@ class MusicScoreApp:
             self.canvas.delete("all") 
             self.canvas.create_image(x_off, y_off, image=self.tk_image, anchor="nw", tags="bg")
             
-            # Update Page Label (Single Page)
             self.lbl_page.config(text=f"Page: {self.current_page + 1} / {self.total_pages}")
 
         self._draw_vectors()
@@ -651,7 +650,8 @@ class MusicScoreApp:
                 pts.append(oy + ny*h)
             if len(pts) >= 4:
                 wd = annot.get('width', 2)
-                self.canvas.create_line(pts, fill=annot['color'], width=wd, capstyle=tk.ROUND, joinstyle=tk.ROUND, smooth=True, splinesteps=36, tags=tag)
+                # Removed splinesteps/smooth to fix hang on heavy drawing
+                self.canvas.create_line(pts, fill=annot['color'], width=wd, capstyle=tk.ROUND, joinstyle=tk.ROUND, tags=tag)
         
         elif annot['type'] == 'text':
             x = ox + annot['x'] * w
