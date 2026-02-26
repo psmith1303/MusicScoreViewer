@@ -2,9 +2,19 @@
 """
 Music Score Viewer
 ==================
-Version: 1.7.2
+Version: 1.7.3
 
 A robust Python application to view and annotate PDF music scores.
+
+Changes in v1.7.3:
+19. FIX: SafeJSON.save now returns bool and shows a visible error dialog on
+    failure (directory missing or write error) instead of silently discarding
+    data.  Previously, a missing target directory would log a warning and
+    return with no user notification, causing silent data loss.
+20. IMPROVEMENT: Dependency versions pinned in requirements.txt
+    (pymupdf>=1.25,<2.0; Pillow>=11.0,<12.0) for reproducible installs.
+21. FIX: README corrected (wrong script filename) and updated to reflect
+    current features.
 
 Changes in v1.7.2:
 16. IMPROVEMENT: Added portable_path() helper — paths are now stored in JSON
@@ -116,7 +126,7 @@ SETLIST_PATH = os.path.join(APP_DIR, "setlists.json")
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG = {
-    "version": "1.7.2",
+    "version": "1.7.3",
     "ui": {
         "window_size": "1200x900",
         "bg_color": "#333333",
@@ -293,25 +303,36 @@ class SafeJSON:
             return default if default is not None else {}
 
     @staticmethod
-    def save(filepath: str, data) -> None:
-        """Write data atomically via a temp file + os.replace."""
+    def save(filepath: str, data) -> bool:
+        """Write data atomically via a temp file + os.replace.
+
+        Returns True on success, False on failure.  A visible error dialog is
+        shown to the user on failure so callers do not need their own
+        error-reporting logic.
+        """
         tmp_name = None
         try:
             dir_name = os.path.dirname(filepath)
             if dir_name and not os.path.exists(dir_name):
-                logging.warning(f"SafeJSON: directory does not exist: {dir_name}")
-                return
+                msg = f"Cannot save — directory does not exist:\n{dir_name}"
+                logging.error(f"SafeJSON.save: {msg}")
+                messagebox.showerror("Save Failed", msg)
+                return False
             fd, tmp_name = tempfile.mkstemp(dir=dir_name or ".", text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
             os.replace(tmp_name, filepath)
+            return True
         except Exception as e:
-            logging.error(f"Failed to save JSON atomically to {filepath}: {e}")
+            msg = f"Failed to save:\n{filepath}\n\n{e}"
+            logging.error(f"SafeJSON.save: {msg}")
+            messagebox.showerror("Save Failed", msg)
             if tmp_name and os.path.exists(tmp_name):
                 try:
                     os.remove(tmp_name)
                 except OSError:
                     pass
+            return False
 
 
 class ConfigManager:
