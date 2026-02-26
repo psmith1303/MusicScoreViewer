@@ -29,7 +29,7 @@ Changes in v1.7.2:
 
 Changes in v1.7.1:
 15. FIX: normalize_path now translates between Windows drive-letter paths
-    (Z:\...) and WSL mount paths (/mnt/z/...) so that setlists saved on one
+    (Z:/...) and WSL mount paths (/mnt/z/...) so that setlists saved on one
     platform load correctly on the other.
 
 Changes in v1.7.0:
