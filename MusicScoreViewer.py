@@ -2,9 +2,14 @@
 """
 Music Score Viewer
 ==================
-Version: 1.7.0
+Version: 1.7.1
 
 A robust Python application to view and annotate PDF music scores.
+
+Changes in v1.7.1:
+15. FIX: normalize_path now translates between Windows drive-letter paths
+    (Z:\...) and WSL mount paths (/mnt/z/...) so that setlists saved on one
+    platform load correctly on the other.
 
 Changes in v1.7.0:
 14. FEATURE: Per-page rotation tool. Two toolbar buttons (↻ / ↺) rotate the
@@ -100,7 +105,7 @@ SETLIST_PATH = os.path.join(APP_DIR, "setlists.json")
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG = {
-    "version": "1.7.0",
+    "version": "1.7.1",
     "ui": {
         "window_size": "1200x900",
         "bg_color": "#333333",
@@ -153,13 +158,28 @@ MUSICAL_SYMBOLS_SET = {
 def normalize_path(path: str) -> str:
     """
     Normalise a path to the OS-native separator and resolve any redundant
-    components.  This ensures paths round-trip correctly through JSON on all
-    platforms (e.g. a path saved on Linux with forward slashes loads correctly
-    on Windows, and vice versa).
+    components.  Also translates between Windows drive-letter paths and WSL
+    mount paths so that a setlist saved on one platform loads correctly on
+    the other:
+      Windows -> WSL:  Z:\\foo\\bar  ->  /mnt/z/foo/bar
+      WSL -> Windows:  /mnt/z/foo/bar  ->  Z:\\foo\\bar
     """
+    import re
     if not path:
         return path
-    return os.path.normpath(path)
+    # Normalise all separators to forward slashes first for easy matching.
+    p = path.replace("\\", "/")
+    if sys.platform != "win32":
+        # Running on Linux/WSL — convert Windows drive paths to /mnt/<drive>/...
+        m = re.match(r'^([A-Za-z]):/(.*)', p)
+        if m:
+            p = f"/mnt/{m.group(1).lower()}/{m.group(2)}"
+    else:
+        # Running on Windows — convert WSL mount paths to <drive>:\...
+        m = re.match(r'^/mnt/([a-zA-Z])/(.*)', p)
+        if m:
+            p = f"{m.group(1).upper()}:/{m.group(2)}"
+    return os.path.normpath(p)
 
 # ---------------------------------------------------------------------------
 # Argument Parsing & Logging
