@@ -2,9 +2,20 @@
 """
 Music Score Viewer
 ==================
-Version: 1.7.1
+Version: 1.7.2
 
 A robust Python application to view and annotate PDF music scores.
+
+Changes in v1.7.2:
+16. IMPROVEMENT: Added portable_path() helper — paths are now stored in JSON
+    using forward slashes (Z:/PARA/...) so the file is human-readable without
+    backslash escaping issues.  normalize_path() still converts to OS-native
+    separators at the point of filesystem access.
+17. FIX: When a setlist item's file cannot be found, a dialog now offers
+    Skip (advance to next song), Locate (browse for the file and update the
+    stored path permanently), or Cancel (exit setlist mode).
+18. FIX: SafeJSON.load now shows a visible warning dialog when a JSON file
+    cannot be parsed, instead of silently returning empty data.
 
 Changes in v1.7.1:
 15. FIX: normalize_path now translates between Windows drive-letter paths
@@ -105,7 +116,7 @@ SETLIST_PATH = os.path.join(APP_DIR, "setlists.json")
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG = {
-    "version": "1.7.1",
+    "version": "1.7.2",
     "ui": {
         "window_size": "1200x900",
         "bg_color": "#333333",
@@ -181,6 +192,22 @@ def normalize_path(path: str) -> str:
             p = f"{m.group(1).upper()}:/{m.group(2)}"
     return os.path.normpath(p)
 
+
+def portable_path(path: str) -> str:
+    """
+    Convert a path to a portable storage form that is safe to write into JSON
+    on any platform:
+      - Forward slashes throughout (no backslashes to escape in JSON).
+      - Windows drive letters kept as-is  (Z:/PARA/...)
+      - WSL mount paths kept as-is        (/mnt/z/PARA/...)
+    This is the inverse of normalize_path's OS-native conversion: use
+    portable_path() when *saving* to JSON, normalize_path() when *reading*
+    from JSON for actual filesystem access.
+    """
+    if not path:
+        return path
+    return path.replace("\\", "/")
+
 # ---------------------------------------------------------------------------
 # Argument Parsing & Logging
 # ---------------------------------------------------------------------------
@@ -253,6 +280,14 @@ class SafeJSON:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 return json.load(f)
+        except json.JSONDecodeError as e:
+            logging.error(f"Corrupt JSON in {filepath}: {e}")
+            messagebox.showwarning(
+                "Corrupt Data File",
+                f"Could not parse:\n{filepath}\n\n{e}\n\n"
+                "Starting with empty data. Your original file has not been changed."
+            )
+            return default if default is not None else {}
         except Exception as e:
             logging.error(f"Error reading JSON {filepath}: {e}")
             return default if default is not None else {}
@@ -533,7 +568,7 @@ class ScorePickerDialog(tk.Toplevel):
                 logging.warning(f"Invalid end page value '{ep_txt}'; treating as None.")
 
         self.result = {
-            "path": normalize_path(path), "composer": comp, "title": title,
+            "path": portable_path(path), "composer": comp, "title": title,
             "start_page": sp, "end_page": ep,
         }
         self.destroy()
@@ -1070,7 +1105,7 @@ class MusicScoreApp:
     def _on_scan_complete(self, found: list, path: str) -> None:
         self.scores = found
         self._apply_filters()
-        self.config.set("behavior", "last_directory", normalize_path(path))
+        self.config.set("behavior", "last_directory", portable_path(path))
         self.root.config(cursor="")
 
     def _clear_composer_filter(self) -> None:
@@ -1281,7 +1316,7 @@ class MusicScoreApp:
         if d.result:
             s_name = d.result['setlist']
             self.setlists[s_name].append({
-                "path":       normalize_path(self.current_score_path),
+                "path":       portable_path(self.current_score_path),
                 "composer":   comp,
                 "title":      title,
                 "start_page": d.result['start'],
@@ -1322,6 +1357,77 @@ class MusicScoreApp:
         self.current_setlist_index = 0
         self._load_setlist_item(0)
 
+    def _resolve_missing_file(self, item: dict, item_path: str, index: int, from_end: bool) -> str | None:
+        """
+        Called when a setlist item's file cannot be found.
+        Offers three options:
+          Skip   – advance to the next item (or stop at end of list).
+          Locate – open a file dialog to manually find the file; updates the
+                   stored path so future plays work without intervention.
+          Cancel – exit setlist mode entirely.
+        Returns the resolved path string on success, or None to abort.
+        """
+        title = item.get('title', os.path.basename(item_path))
+        choice = self._missing_file_dialog(title, item_path)
+
+        if choice == "skip":
+            next_idx = index + 1
+            if next_idx < len(self.current_setlist_items):
+                self._load_setlist_item(next_idx, from_end)
+            return None
+
+        if choice == "locate":
+            new_path = filedialog.askopenfilename(
+                title=f"Locate: {title}",
+                filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+                initialdir=os.path.dirname(item_path),
+            )
+            if new_path:
+                new_path = normalize_path(new_path)
+                # Update the stored path and save so future plays work.
+                item['path'] = portable_path(new_path)
+                self._save_setlists()
+                return new_path
+            # User cancelled the file dialog — treat as Cancel.
+
+        # "cancel" or failed locate: exit setlist mode cleanly.
+        self.mode = "library"
+        self.current_setlist_name  = None
+        self.current_setlist_items = []
+        self.current_setlist_index = -1
+        self.root.title(self.base_title)
+        return None
+
+    def _missing_file_dialog(self, title: str, path: str) -> str:
+        """
+        Modal dialog offering Skip / Locate / Cancel for a missing setlist file.
+        Returns 'skip', 'locate', or 'cancel'.
+        """
+        dlg = tk.Toplevel(self.root)
+        dlg.title("File Not Found")
+        dlg.transient(self.root)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        tk.Label(dlg, text=f"Cannot find file for:\n\"{title}\"",
+                 wraplength=380, justify=tk.LEFT).pack(padx=20, pady=(15, 5))
+        tk.Label(dlg, text=path, wraplength=380, justify=tk.LEFT,
+                 fg="grey40").pack(padx=20, pady=(0, 15))
+
+        result = tk.StringVar(value="cancel")
+
+        btn_frame = tk.Frame(dlg)
+        btn_frame.pack(padx=20, pady=(0, 15))
+        tk.Button(btn_frame, text="Skip",   width=10,
+                  command=lambda: (result.set("skip"),   dlg.destroy())).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="Locate…", width=10,
+                  command=lambda: (result.set("locate"), dlg.destroy())).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="Cancel", width=10,
+                  command=lambda: (result.set("cancel"), dlg.destroy())).pack(side=tk.LEFT, padx=4)
+
+        dlg.wait_window()
+        return result.get()
+
     def _load_setlist_item(self, index: int, from_end: bool = False) -> None:
         if not (0 <= index < len(self.current_setlist_items)):
             return
@@ -1330,8 +1436,9 @@ class MusicScoreApp:
 
         item_path = normalize_path(item['path'])
         if not os.path.exists(item_path):
-            messagebox.showerror("Error", f"File not found:\n{item_path}")
-            return
+            item_path = self._resolve_missing_file(item, item_path, index, from_end)
+            if item_path is None:
+                return
         if not self._load_pdf(item_path, setlist_mode=True):
             return
 
