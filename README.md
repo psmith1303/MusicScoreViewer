@@ -54,5 +54,21 @@ instead (49 of 60 pass).
 | File | Total | Linux passes | Windows passes | What is tested |
 |---|---|---|---|---|
 | `tests/test_path_utils.py` | 22 | 18 | 12 | `normalize_path()` and `portable_path()`, including WSL↔Windows translation and round-trip invariants |
-| `tests/test_rotation.py` | 17 | 17 | 17 | Annotation rotation transform maths: identity, known corners, CW/CCW inverse, composition, bounds |
+| `tests/test_rotation.py` | 17 | 17 | 17 | `_rotate_annotation_coords()` rotation transform maths: identity, known corners, CW/CCW inverse, composition, bounds |
 | `tests/test_safe_json.py` | 21 | 21 | 20 | `SafeJSON.load()` and `SafeJSON.save()`: missing files, valid JSON, corrupt JSON, missing directory, atomic write, unicode, round-trips |
+
+## Architecture
+
+### Key classes and module-level constructs
+
+| Name | Kind | Description |
+|---|---|---|
+| `SetlistSession` | dataclass | Holds all active setlist playback state (`name`, `items`, `index`, `start_page`, `end_page`). `None` on `MusicScoreApp._session` means library mode; set means setlist mode. |
+| `_rotate_annotation_coords` | function | Rotates annotation coordinates in-place by N×90°. Used by `AnnotationManager` and tested directly in `tests/test_rotation.py`. |
+| `AnnotationManager` | class | Owns annotation state (`annotations`, `rotations`, `_undo_stack`, `tool`, `pen_color`, `current_stroke`) and all persistence / mutation logic. Accessed via `app.annot`. |
+| `MusicScoreApp` | class | Main Tk application controller. Delegates annotation work to `self.annot` and setlist state to `self._session`. |
+
+### File formats
+
+- **`setlists.json`** — setlist definitions; see `docs/setlist-file-format.md` for the full specification.
+- **`<score>.json`** — annotation sidecar written alongside each PDF; versioned JSON containing per-page annotation lists and rotation overrides.
