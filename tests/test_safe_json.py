@@ -5,6 +5,7 @@ These tests mock tkinter.messagebox so they run without a display.
 """
 import json
 import os
+import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -65,6 +66,7 @@ class TestSafeJSONLoad:
             msv.SafeJSON.load(str(f))
         assert f.read_text(encoding="utf-8") == bad_content
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="os.chmod does not restrict read access on Windows")
     def test_unreadable_file_returns_empty_dict(self, tmp_path):
         f = tmp_path / "data.json"
         f.write_text('{"key": "val"}', encoding="utf-8")
