@@ -1861,6 +1861,7 @@ class MusicScoreApp:
             self.canvas.create_line(
                 pts[0][0], pts[0][1], pts[1][0], pts[1][1],
                 fill=self.annot.pen_color, width=w, capstyle=tk.ROUND, joinstyle=tk.ROUND,
+                tags="preview",
             )
 
     def _on_release(self, event) -> None:
@@ -1998,6 +1999,7 @@ class MusicScoreApp:
 
     def _draw_vectors(self) -> None:
         self.canvas.delete("annot")
+        self.canvas.delete("preview")
         for layout in self.page_layout:
             pg = layout['p']
             if pg in self.annot.annotations:
