@@ -45,14 +45,14 @@ python3 -m pytest -v
 python -m pytest -v
 ```
 
-On Windows, three additional tests run that are skipped on Linux — they verify
-that WSL mount paths (`/mnt/z/...`) are correctly translated to Windows
-drive-letter paths (`Z:\...`) by `normalize_path()`.
+Some tests are platform-specific. On Linux/WSL, 4 Windows-only path tests
+are skipped (56 of 60 pass). On Windows, 11 Linux/WSL-only tests are skipped
+instead (49 of 60 pass).
 
 ### What the tests cover
 
-| File | Tests | What is tested |
-|---|---|---|
-| `tests/test_path_utils.py` | 22 | `normalize_path()` and `portable_path()`, including WSL↔Windows translation and round-trip invariants |
-| `tests/test_rotation.py` | 17 | Annotation rotation transform maths: identity, known corners, CW/CCW inverse, composition, bounds |
-| `tests/test_safe_json.py` | 21 | `SafeJSON.load()` and `SafeJSON.save()`: missing files, valid JSON, corrupt JSON, missing directory, atomic write, unicode, round-trips |
+| File | Total | Linux passes | Windows passes | What is tested |
+|---|---|---|---|---|
+| `tests/test_path_utils.py` | 22 | 18 | 12 | `normalize_path()` and `portable_path()`, including WSL↔Windows translation and round-trip invariants |
+| `tests/test_rotation.py` | 17 | 17 | 17 | Annotation rotation transform maths: identity, known corners, CW/CCW inverse, composition, bounds |
+| `tests/test_safe_json.py` | 21 | 21 | 20 | `SafeJSON.load()` and `SafeJSON.save()`: missing files, valid JSON, corrupt JSON, missing directory, atomic write, unicode, round-trips |
