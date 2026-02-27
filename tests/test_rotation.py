@@ -1,36 +1,32 @@
 """
 Tests for annotation rotation transform mathematics.
 
-The core formula used in MusicScoreApp._transform_annotations_for_rotation:
+The core formula used in _rotate_annotation_coords (module-level function):
     90° CW in normalised space:  (nx, ny) -> (1 - ny, nx)
 
 Applied `steps` times for (90 * steps)° total clockwise rotation.
-
-NOTE (Phase 3): Once _transform_annotations_for_rotation is extracted into a
-standalone function these tests should import and call it directly rather than
-replicating the formula here.
 """
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pytest
+from MusicScoreViewer import _rotate_annotation_coords
 
 
 # ---------------------------------------------------------------------------
-# Replicate the formula from _transform_annotations_for_rotation
+# Thin wrapper that calls the real production function
 # ---------------------------------------------------------------------------
-
-def _rot_pt_cw90(nx: float, ny: float) -> tuple:
-    """One 90° clockwise rotation in normalised [0,1] space."""
-    return 1.0 - ny, nx
-
 
 def _rot_pt(nx: float, ny: float, delta: int) -> tuple:
     """
-    Rotate point (nx, ny) by delta degrees clockwise in normalised space.
-    Matches the steps = (delta // 90) % 4 logic in the production code.
+    Rotate a single point (nx, ny) by delta degrees clockwise using the
+    production _rotate_annotation_coords function.
     """
-    steps = (delta // 90) % 4
-    for _ in range(steps):
-        nx, ny = _rot_pt_cw90(nx, ny)
-    return nx, ny
+    annot = {'type': 'ink', 'points': [[nx, ny]]}
+    _rotate_annotation_coords([annot], delta)
+    result = annot['points'][0]
+    return result[0], result[1]
 
 
 EPSILON = 1e-10

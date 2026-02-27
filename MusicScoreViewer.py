@@ -74,6 +74,7 @@ Usage:
 import sys
 import os
 import json
+import copy
 import logging
 import argparse
 import uuid
@@ -84,6 +85,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from collections import deque
+from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------
 # Path Determination & Cross-Platform Setup
@@ -744,6 +746,176 @@ class CompactTagFrame(tk.Frame):
 
 
 # ---------------------------------------------------------------------------
+# Setlist session state
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SetlistSession:
+    name:       str
+    items:      list
+    index:      int
+    start_page: int
+    end_page:   int
+
+
+# ---------------------------------------------------------------------------
+# Annotation helpers
+# ---------------------------------------------------------------------------
+
+def _rotate_annotation_coords(annotations: list, delta: int) -> None:
+    """
+    Rotate annotation coordinates in-place by delta degrees (90° increments).
+    annotations: list of annotation dicts for a single page.
+    """
+    steps = (delta // 90) % 4
+
+    def _rot_pt(nx, ny):
+        for _ in range(steps):
+            nx, ny = 1.0 - ny, nx
+        return nx, ny
+
+    for annot in annotations:
+        if annot['type'] == 'ink':
+            annot['points'] = [list(_rot_pt(nx, ny)) for nx, ny in annot['points']]
+        elif annot['type'] == 'text':
+            annot['x'], annot['y'] = _rot_pt(annot['x'], annot['y'])
+
+
+# ---------------------------------------------------------------------------
+# Annotation manager
+# ---------------------------------------------------------------------------
+
+class AnnotationManager:
+    """Owns all annotation state and persistence for the current score."""
+
+    UNDO_DEPTH = 20
+
+    def __init__(self, default_pen_color: str = "black") -> None:
+        self.annotations:    dict                = {}
+        self.rotations:      dict[int, int]      = {}
+        self._undo_stack:    dict[int, deque]    = {}
+        self.tool:           str                 = "nav"
+        self.pen_color:      str                 = default_pen_color
+        self.current_stroke: list                = []
+        self._path:          str | None          = None
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def load(self, path: str) -> None:
+        """Load annotations and rotations from the sidecar JSON for *path*."""
+        base = os.path.splitext(path)[0] + ".json"
+        self._path = base
+        raw  = SafeJSON.load(base)
+        self.annotations = {}
+        self.rotations   = {}
+        self._undo_stack  = {}
+        needs_resave = False
+
+        if "version" in raw:
+            for p_str, deg in raw.get("rotations", {}).items():
+                self.rotations[int(p_str)] = int(deg)
+            for p, items in raw.get("pages", {}).items():
+                clean = []
+                for it in items:
+                    if "uuid" not in it:
+                        it["uuid"] = str(uuid.uuid4())
+                        needs_resave = True
+                    clean.append(it)
+                self.annotations[int(p)] = clean
+        elif raw:
+            for p, items in raw.items():
+                clean = []
+                for it in items:
+                    it["uuid"] = str(uuid.uuid4())
+                    clean.append(it)
+                self.annotations[int(p)] = clean
+            needs_resave = True
+
+        if needs_resave:
+            logging.info(f"Migrating annotations to v{ANNOTATION_VERSION}: {base}")
+            self.save()
+
+    def save(self) -> None:
+        """Save annotations and rotations to the sidecar JSON."""
+        if not self._path:
+            return
+        rotations_to_save = {str(p): r for p, r in self.rotations.items() if r % 360 != 0}
+        SafeJSON.save(self._path, {
+            "version":   ANNOTATION_VERSION,
+            "rotations": rotations_to_save,
+            "pages":     self.annotations,
+        })
+
+    def clear(self) -> None:
+        """Reset all state; called when a score is closed."""
+        self.annotations  = {}
+        self.rotations    = {}
+        self._undo_stack  = {}
+        self.current_stroke = []
+        self._path        = None
+
+    # ------------------------------------------------------------------
+    # Mutation helpers
+    # ------------------------------------------------------------------
+
+    def add(self, pg: int, annot: dict) -> None:
+        """Push undo snapshot, append annotation, and persist."""
+        self.push_undo(pg)
+        if pg not in self.annotations:
+            self.annotations[pg] = []
+        self.annotations[pg].append(annot)
+        self.save()
+
+    def erase_at(self, pg: int, x: int, y: int, canvas, layout: dict) -> bool:
+        """
+        Erase the annotation closest to (x, y) within a generous halo.
+        Returns True if something was erased (caller should redraw).
+        """
+        for item in canvas.find_overlapping(x - 20, y - 20, x + 20, y + 20):
+            tags = canvas.gettags(item)
+            if 'bg' in tags:
+                continue
+            uid = next((t[5:] for t in tags if t.startswith("uuid_")), None)
+            if uid and pg in self.annotations:
+                self.push_undo(pg)
+                self.annotations[pg] = [
+                    a for a in self.annotations[pg] if a['uuid'] != uid
+                ]
+                self.save()
+                canvas.delete(item)
+                return True
+        return False
+
+    def push_undo(self, pg: int) -> None:
+        """Snapshot the current annotation list for *pg* before modifying it."""
+        if pg not in self._undo_stack:
+            self._undo_stack[pg] = deque(maxlen=self.UNDO_DEPTH)
+        self._undo_stack[pg].append(copy.deepcopy(self.annotations.get(pg, [])))
+
+    def undo(self, pg: int) -> bool:
+        """Restore the previous snapshot for *pg*. Returns True if successful."""
+        stack = self._undo_stack.get(pg)
+        if stack:
+            self.annotations[pg] = stack.pop()
+            self.save()
+            return True
+        return False
+
+    def rotate_page_annotations(self, pg: int, delta: int) -> None:
+        """
+        Transform annotation coordinates for *pg* by *delta* degrees and
+        update the stored rotation value.
+        """
+        if pg in self.annotations and self.annotations[pg]:
+            _rotate_annotation_coords(self.annotations[pg], delta)
+        old_rot = self.rotations.get(pg, 0)
+        self.rotations[pg] = (old_rot + delta) % 360
+        self.save()
+
+
+# ---------------------------------------------------------------------------
 # Main Application
 # ---------------------------------------------------------------------------
 
@@ -788,27 +960,16 @@ class MusicScoreApp:
         self.tk_image          = None
         self.is_two_page       = False
         self.page_layout: list = []
-        self.annotations: dict = {}
-        self.tool              = "nav"
-        self.pen_color         = self.config.get("ui", "default_pen_color", default="black")
-        self.current_stroke: list = []
         self._resize_job       = None   # debounce handle
 
-        # Per-page rotation overrides (degrees: 0, 90, 180, 270).
-        # Stored in sidecar JSON; the PDF itself is never modified.
-        self.rotations: dict[int, int] = {}
-
-        # Undo stack: maps page_number -> deque of annotation-list snapshots
-        self._undo_stack: dict[int, deque] = {}
+        # Annotation state (annotations, rotations, undo, tool, pen colour)
+        self.annot = AnnotationManager(
+            default_pen_color=self.config.get("ui", "default_pen_color", default="black")
+        )
 
         # --- Setlist state ---
-        self.setlists                = SafeJSON.load(SETLIST_PATH)
-        self.mode                    = "library"
-        self.current_setlist_name: str | None = None
-        self.current_setlist_items: list = []
-        self.current_setlist_index   = -1
-        self.sl_item_start_page      = 0
-        self.sl_item_end_page        = 0
+        self.setlists            = SafeJSON.load(SETLIST_PATH)
+        self._session: SetlistSession | None = None
 
         # --- Combo typeahead ---
         self.combo_search        = ""
@@ -1021,7 +1182,7 @@ class MusicScoreApp:
         self.lbl_status  = tk.Label(tb, text="Mode: Nav", bg=self.toolbar_color,
                                     font=("Arial", 10, "bold"))
         self.lbl_status.pack(side=tk.RIGHT, padx=10)
-        self.lbl_col_ind = tk.Label(tb, width=3, bg=self.pen_color)
+        self.lbl_col_ind = tk.Label(tb, width=3, bg=self.annot.pen_color)
         self.lbl_col_ind.pack(side=tk.RIGHT, padx=5)
 
         self.canvas = tk.Canvas(self.f_display, bg=self.bg_color, highlightthickness=0)
@@ -1358,10 +1519,9 @@ class MusicScoreApp:
             return
         sel = self.tree_sl.selection()
         start_index = int(sel[0]) if sel else 0
-        self.mode                  = "setlist"
-        self.current_setlist_name  = name
-        self.current_setlist_items = items
-        self.current_setlist_index = start_index
+        self._session = SetlistSession(
+            name=name, items=items, index=start_index, start_page=0, end_page=0
+        )
         self._load_setlist_item(start_index)
 
     def _play_setlist(self) -> None:
@@ -1372,10 +1532,9 @@ class MusicScoreApp:
         if not items:
             messagebox.showinfo("Empty", "This setlist has no songs.")
             return
-        self.mode                  = "setlist"
-        self.current_setlist_name  = name
-        self.current_setlist_items = items
-        self.current_setlist_index = 0
+        self._session = SetlistSession(
+            name=name, items=items, index=0, start_page=0, end_page=0
+        )
         self._load_setlist_item(0)
 
     def _resolve_missing_file(self, item: dict, item_path: str, index: int, from_end: bool) -> str | None:
@@ -1393,7 +1552,7 @@ class MusicScoreApp:
 
         if choice == "skip":
             next_idx = index + 1
-            if next_idx < len(self.current_setlist_items):
+            if self._session and next_idx < len(self._session.items):
                 self._load_setlist_item(next_idx, from_end)
             return None
 
@@ -1412,10 +1571,7 @@ class MusicScoreApp:
             # User cancelled the file dialog — treat as Cancel.
 
         # "cancel" or failed locate: exit setlist mode cleanly.
-        self.mode = "library"
-        self.current_setlist_name  = None
-        self.current_setlist_items = []
-        self.current_setlist_index = -1
+        self._session = None
         self.root.title(self.base_title)
         return None
 
@@ -1450,10 +1606,10 @@ class MusicScoreApp:
         return result.get()
 
     def _load_setlist_item(self, index: int, from_end: bool = False) -> None:
-        if not (0 <= index < len(self.current_setlist_items)):
+        if not self._session or not (0 <= index < len(self._session.items)):
             return
-        self.current_setlist_index = index
-        item = self.current_setlist_items[index]
+        self._session.index = index
+        item = self._session.items[index]
 
         item_path = normalize_path(item['path'])
         if not os.path.exists(item_path):
@@ -1467,13 +1623,13 @@ class MusicScoreApp:
         ep_raw = item.get('end_page')
         ep = (ep_raw - 1) if ep_raw else (self.total_pages - 1)
 
-        self.sl_item_start_page = sp
-        self.sl_item_end_page   = min(ep, self.total_pages - 1)
+        self._session.start_page = sp
+        self._session.end_page   = min(ep, self.total_pages - 1)
 
-        self._goto_page(self.sl_item_end_page if from_end else self.sl_item_start_page)
+        self._goto_page(self._session.end_page if from_end else self._session.start_page)
         self.root.title(
-            f"[{self.current_setlist_name} ({index + 1}/"
-            f"{len(self.current_setlist_items)})] {item.get('title', '')}"
+            f"[{self._session.name} ({index + 1}/"
+            f"{len(self._session.items)})] {item.get('title', '')}"
         )
 
     # -----------------------------------------------------------------------
@@ -1484,7 +1640,7 @@ class MusicScoreApp:
         sel = self.tree.selection()
         if not sel:
             return
-        self.mode = "library"
+        self._session = None
         score = self._filtered_scores[int(sel[0])]
         self._load_pdf(score.filepath)
 
@@ -1504,7 +1660,7 @@ class MusicScoreApp:
             if not setlist_mode:
                 self.root.title(f"{self.base_title} - {os.path.basename(path)}")
 
-            self._load_annotations(path)
+            self.annot.load(path)
 
             self.notebook.pack_forget()
             self.f_display.pack(fill=tk.BOTH, expand=True)
@@ -1515,41 +1671,6 @@ class MusicScoreApp:
         except Exception as exc:
             messagebox.showerror("PDF Error", str(exc))
             return False
-
-    def _load_annotations(self, path: str) -> None:
-        """Load annotations and rotations from sidecar JSON, migrating old format if needed."""
-        base = os.path.splitext(path)[0] + ".json"
-        raw  = SafeJSON.load(base)
-        self.annotations = {}
-        self.rotations   = {}
-        self._undo_stack  = {}
-        needs_resave = False
-
-        if "version" in raw:
-            # Load per-page rotations (key is a string in JSON, convert to int)
-            for p_str, deg in raw.get("rotations", {}).items():
-                self.rotations[int(p_str)] = int(deg)
-            for p, items in raw.get("pages", {}).items():
-                clean = []
-                for it in items:
-                    if "uuid" not in it:
-                        it["uuid"] = str(uuid.uuid4())
-                        needs_resave = True
-                    clean.append(it)
-                self.annotations[int(p)] = clean
-        elif raw:
-            # Migrate old format immediately and re-save
-            for p, items in raw.items():
-                clean = []
-                for it in items:
-                    it["uuid"] = str(uuid.uuid4())
-                    clean.append(it)
-                self.annotations[int(p)] = clean
-            needs_resave = True
-
-        if needs_resave:
-            logging.info(f"Migrating annotations to v{ANNOTATION_VERSION}: {base}")
-            self._save_annots()
 
     def _close_score(self, event=None) -> None:
         if not self.f_display.winfo_ismapped():
@@ -1564,22 +1685,10 @@ class MusicScoreApp:
         self.root.title(self.base_title)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        if self.mode == "setlist":
+        if self._session:
             self.tree_sl.focus_set()
         else:
             self.tree.focus_set()
-
-    def _save_annots(self) -> None:
-        if not self.current_score_path:
-            return
-        base = os.path.splitext(self.current_score_path)[0] + ".json"
-        # Only persist non-zero rotations to keep the file clean
-        rotations_to_save = {str(p): r for p, r in self.rotations.items() if r % 360 != 0}
-        SafeJSON.save(base, {
-            "version":   ANNOTATION_VERSION,
-            "rotations": rotations_to_save,
-            "pages":     self.annotations,
-        })
 
     # -----------------------------------------------------------------------
     # Navigation
@@ -1591,49 +1700,49 @@ class MusicScoreApp:
             self._render_pdf()
 
     def _next_page(self, e=None) -> None:
-        if self._should_ignore_key() or not self.doc or self.tool == "text":
+        if self._should_ignore_key() or not self.doc or self.annot.tool == "text":
             return
         step    = 2 if self.is_two_page else 1
         next_pg = self.current_page + step
 
-        if self.mode == "setlist":
-            at_end = (self.current_page >= self.sl_item_end_page or
-                      (self.is_two_page and self.current_page + 1 >= self.sl_item_end_page))
+        if self._session:
+            at_end = (self.current_page >= self._session.end_page or
+                      (self.is_two_page and self.current_page + 1 >= self._session.end_page))
             if at_end:
-                if self.current_setlist_index < len(self.current_setlist_items) - 1:
-                    self._load_setlist_item(self.current_setlist_index + 1)
+                if self._session.index < len(self._session.items) - 1:
+                    self._load_setlist_item(self._session.index + 1)
                 return
-            if next_pg > self.sl_item_end_page:
+            if next_pg > self._session.end_page:
                 return
 
         if next_pg < self.total_pages:
             self._goto_page(next_pg)
 
     def _prev_page(self, e=None) -> None:
-        if self._should_ignore_key() or not self.doc or self.tool == "text":
+        if self._should_ignore_key() or not self.doc or self.annot.tool == "text":
             return
         step    = 2 if self.is_two_page else 1
         prev_pg = self.current_page - step
 
-        if self.mode == "setlist":
-            if self.current_page <= self.sl_item_start_page:
-                if self.current_setlist_index > 0:
-                    self._load_setlist_item(self.current_setlist_index - 1, from_end=True)
+        if self._session:
+            if self.current_page <= self._session.start_page:
+                if self._session.index > 0:
+                    self._load_setlist_item(self._session.index - 1, from_end=True)
                 return
-            prev_pg = max(prev_pg, self.sl_item_start_page)
+            prev_pg = max(prev_pg, self._session.start_page)
 
         self._goto_page(max(0, prev_pg))
 
     def _on_home(self, e=None) -> None:
         if self._should_ignore_key():
             return
-        target = self.sl_item_start_page if self.mode == "setlist" else 0
+        target = self._session.start_page if self._session else 0
         self._goto_page(target)
 
     def _on_end(self, e=None) -> None:
         if self._should_ignore_key():
             return
-        target = self.sl_item_end_page if self.mode == "setlist" else self.total_pages - 1
+        target = self._session.end_page if self._session else self.total_pages - 1
         self._goto_page(target)
 
     # -----------------------------------------------------------------------
@@ -1641,7 +1750,7 @@ class MusicScoreApp:
     # -----------------------------------------------------------------------
 
     def _set_tool(self, t: str) -> None:
-        self.tool = t
+        self.annot.tool = t
         self.lbl_status.config(text=f"Mode: {t.capitalize()}")
         cursors = {"nav": "", "pen": "pencil", "text": "xterm", "eraser": "crosshair"}
         self.canvas.config(cursor=cursors.get(t, ""))
@@ -1650,14 +1759,14 @@ class MusicScoreApp:
     def _update_tool_buttons(self) -> None:
         """Highlight the active tool button; reset all others."""
         for tool_name, btn in self._tool_buttons.items():
-            if tool_name == self.tool:
+            if tool_name == self.annot.tool:
                 btn.config(relief=tk.SUNKEN, bg="#aad4f5")
             else:
                 btn.config(relief=tk.RAISED, bg=self.toolbar_color)
 
     def _set_color(self, c: str) -> None:
         """Set the pen colour without changing the active tool."""
-        self.pen_color = c
+        self.annot.pen_color = c
         self.lbl_col_ind.config(bg=c)
         # FIX: removed implicit tool switch — colour selection is independent of tool
 
@@ -1672,7 +1781,7 @@ class MusicScoreApp:
         return None
 
     def _on_click(self, event) -> None:
-        if self.tool == "nav":
+        if self.annot.tool == "nav":
             h = self.canvas.winfo_height()
             w = self.canvas.winfo_width()
             if event.y < h * 0.15:
@@ -1687,18 +1796,18 @@ class MusicScoreApp:
         if not l:
             return
 
-        if self.tool == "pen":
-            self.current_stroke = [(event.x, event.y)]
+        if self.annot.tool == "pen":
+            self.annot.current_stroke = [(event.x, event.y)]
 
-        elif self.tool == "text":
+        elif self.annot.tool == "text":
             item = self.canvas.find_closest(event.x, event.y, halo=5)
             tags = self.canvas.gettags(item)
             target_uuid = next((t[5:] for t in tags if t.startswith("uuid_")), None)
 
             edit_data = None
-            if target_uuid and l['p'] in self.annotations:
+            if target_uuid and l['p'] in self.annot.annotations:
                 edit_data = next(
-                    (a for a in self.annotations[l['p']]
+                    (a for a in self.annot.annotations[l['p']]
                      if a['uuid'] == target_uuid and a['type'] == 'text'),
                     None,
                 )
@@ -1708,17 +1817,17 @@ class MusicScoreApp:
                                     edit_data['color'], edit_data['text'],
                                     edit_data.get('font', ''))
                 if d.result:
-                    self._push_undo(l['p'])
+                    self.annot.push_undo(l['p'])
                     edit_data.update({
                         "text":  d.result['text'],
                         "font":  d.result['font'],
                         "size":  self.sc_size.get(),
-                        "color": self.pen_color,
+                        "color": self.annot.pen_color,
                     })
-                    self._save_annots()
+                    self.annot.save()
                     self._draw_vectors()
             else:
-                d = TextEntryDialog(self.root, initial_color=self.pen_color)
+                d = TextEntryDialog(self.root, initial_color=self.annot.pen_color)
                 if d.result:
                     nx = (event.x - l['x']) / l['w']
                     ny = (event.y - l['y']) / l['h']
@@ -1728,97 +1837,61 @@ class MusicScoreApp:
                         "x":     nx, "y": ny,
                         "text":  d.result['text'],
                         "font":  d.result['font'],
-                        "color": self.pen_color,
+                        "color": self.annot.pen_color,
                         "size":  self.sc_size.get(),
                     }
-                    self._add_annot(l['p'], annot)
+                    self.annot.add(l['p'], annot)
+                    self._draw_vectors()
 
-        elif self.tool == "eraser":
-            self._erase_at(event.x, event.y, l)
-
-    def _erase_at(self, x: int, y: int, layout: dict) -> None:
-        """
-        Erase the annotation closest to (x, y) within a generous halo.
-        Uses find_overlapping with a 20px box rather than find_closest, because
-        find_closest measures distance to a line's bounding box rather than the
-        visible stroke, causing small halos to miss ink annotations entirely.
-        Skips the background image (tagged 'bg'). Erases one item per call.
-        """
-        pg = layout['p']
-        for item in self.canvas.find_overlapping(x - 20, y - 20, x + 20, y + 20):
-            tags = self.canvas.gettags(item)
-            if 'bg' in tags:
-                continue
-            uid = next((t[5:] for t in tags if t.startswith("uuid_")), None)
-            if uid and pg in self.annotations:
-                self._push_undo(pg)
-                self.annotations[pg] = [
-                    a for a in self.annotations[pg] if a['uuid'] != uid
-                ]
-                self._save_annots()
-                self.canvas.delete(item)
-                return  # erase one annotation per click/drag step
+        elif self.annot.tool == "eraser":
+            if self.annot.erase_at(l['p'], event.x, event.y, self.canvas, l):
+                self._draw_vectors()
 
     def _on_drag(self, event) -> None:
-        if self.tool == "eraser":
+        if self.annot.tool == "eraser":
             l = self._get_layout_at(event.x, event.y)
             if l:
-                self._erase_at(event.x, event.y, l)
+                if self.annot.erase_at(l['p'], event.x, event.y, self.canvas, l):
+                    self._draw_vectors()
             return
-        if self.tool == "pen" and self.current_stroke:
-            self.current_stroke.append((event.x, event.y))
-            pts = self.current_stroke[-2:]
+        if self.annot.tool == "pen" and self.annot.current_stroke:
+            self.annot.current_stroke.append((event.x, event.y))
+            pts = self.annot.current_stroke[-2:]
             w   = self.sc_size.get()
             self.canvas.create_line(
                 pts[0][0], pts[0][1], pts[1][0], pts[1][1],
-                fill=self.pen_color, width=w, capstyle=tk.ROUND, joinstyle=tk.ROUND,
+                fill=self.annot.pen_color, width=w, capstyle=tk.ROUND, joinstyle=tk.ROUND,
             )
 
     def _on_release(self, event) -> None:
-        if self.tool == "pen" and len(self.current_stroke) > 1:
-            l = self._get_layout_at(self.current_stroke[0][0], self.current_stroke[0][1])
+        if self.annot.tool == "pen" and len(self.annot.current_stroke) > 1:
+            l = self._get_layout_at(
+                self.annot.current_stroke[0][0], self.annot.current_stroke[0][1]
+            )
             if l:
                 norm = [
                     [(sx - l['x']) / l['w'], (sy - l['y']) / l['h']]
-                    for sx, sy in self.current_stroke
+                    for sx, sy in self.annot.current_stroke
                 ]
                 annot = {
                     "uuid":   str(uuid.uuid4()),
                     "type":   "ink",
                     "points": norm,
-                    "color":  self.pen_color,
+                    "color":  self.annot.pen_color,
                     "width":  self.sc_size.get(),
                 }
-                self._add_annot(l['p'], annot)
-        self.current_stroke = []
-
-    def _add_annot(self, pg: int, annot: dict) -> None:
-        self._push_undo(pg)
-        if pg not in self.annotations:
-            self.annotations[pg] = []
-        self.annotations[pg].append(annot)
-        self._save_annots()
-        self._draw_vectors()
+                self.annot.add(l['p'], annot)
+                self._draw_vectors()
+        self.annot.current_stroke = []
 
     # -----------------------------------------------------------------------
     # Undo
     # -----------------------------------------------------------------------
 
-    def _push_undo(self, pg: int) -> None:
-        """Snapshot the current annotation list for a page before modifying it."""
-        import copy
-        if pg not in self._undo_stack:
-            self._undo_stack[pg] = deque(maxlen=20)
-        self._undo_stack[pg].append(copy.deepcopy(self.annotations.get(pg, [])))
-
     def _undo(self) -> None:
         if self._should_ignore_key():
             return
-        pg = self.current_page
-        stack = self._undo_stack.get(pg)
-        if stack:
-            self.annotations[pg] = stack.pop()
-            self._save_annots()
+        if self.annot.undo(self.current_page):
             self._draw_vectors()
 
     # -----------------------------------------------------------------------
@@ -1857,7 +1930,7 @@ class MusicScoreApp:
             win_w, win_h = 1200, 850
 
         p1       = self.doc.load_page(self.current_page)
-        rot1     = self.rotations.get(self.current_page, 0)
+        rot1     = self.annot.rotations.get(self.current_page, 0)
         r1       = p1.rect
         # For 90°/270° the page dimensions are transposed after rotation
         rot1_norm = rot1 % 360
@@ -1873,14 +1946,14 @@ class MusicScoreApp:
             width_two_pages <= win_w and
             self.current_page + 1 < self.total_pages
         )
-        if self.mode == "setlist" and self.is_two_page:
-            if self.current_page + 1 > self.sl_item_end_page:
+        if self._session and self.is_two_page:
+            if self.current_page + 1 > self._session.end_page:
                 self.is_two_page = False
 
         self.page_layout = []
 
         if self.is_two_page:
-            rot2  = self.rotations.get(self.current_page + 1, 0)
+            rot2  = self.annot.rotations.get(self.current_page + 1, 0)
             zoom  = zoom_fit_h
             mat1  = fitz.Matrix(zoom, zoom).prerotate(rot1)
             mat2  = fitz.Matrix(zoom, zoom).prerotate(rot2)
@@ -1927,8 +2000,8 @@ class MusicScoreApp:
         self.canvas.delete("annot")
         for layout in self.page_layout:
             pg = layout['p']
-            if pg in self.annotations:
-                for annot in self.annotations[pg]:
+            if pg in self.annot.annotations:
+                for annot in self.annot.annotations[pg]:
                     self._draw_single_annot(annot, layout)
 
     def _draw_single_annot(self, annot: dict, layout: dict) -> None:
@@ -1988,48 +2061,8 @@ class MusicScoreApp:
             return
         if self._should_ignore_key():
             return
-        pg      = self.current_page
-        old_rot = self.rotations.get(pg, 0)
-        new_rot = (old_rot + delta) % 360
-
-        # Transform any existing annotations on this page so their stored
-        # (0-1) coordinates remain aligned with the original page content.
-        if pg in self.annotations and self.annotations[pg]:
-            self._transform_annotations_for_rotation(pg, delta)
-
-        self.rotations[pg] = new_rot
-        self._save_annots()
+        self.annot.rotate_page_annotations(self.current_page, delta)
         self._render_pdf()
-
-    def _transform_annotations_for_rotation(self, pg: int, delta: int) -> None:
-        """
-        Rotate annotation coordinates by *delta* degrees around the page centre
-        (0.5, 0.5) in normalised space.  Only 90° increments are supported.
-
-        Annotations are stored in the *original* page coordinate system.  When
-        the display rotates, we must rotate the stored coordinates by the same
-        amount so that they continue to point at the same place on the content.
-
-        For a clockwise rotation (delta > 0):
-            (nx, ny)  →  (1-ny, nx)      [90° CW]
-            (nx, ny)  →  (1-nx, 1-ny)    [180°]
-            (nx, ny)  →  (ny, 1-nx)      [270° CW  /  90° CCW]
-
-        For counter-clockwise (delta < 0) we apply the inverse.
-        """
-        # Normalise delta to one of +90, +180, +270 (all equivalent to CCW 90 → +270)
-        steps = (delta // 90) % 4  # 1 = 90°CW, 2 = 180°, 3 = 270°CW (= 90°CCW)
-
-        def _rot_pt(nx: float, ny: float) -> tuple[float, float]:
-            for _ in range(steps):
-                nx, ny = 1.0 - ny, nx  # 90° CW in normalised space
-            return nx, ny
-
-        for annot in self.annotations[pg]:
-            if annot['type'] == 'ink':
-                annot['points'] = [list(_rot_pt(nx, ny)) for nx, ny in annot['points']]
-            elif annot['type'] == 'text':
-                annot['x'], annot['y'] = _rot_pt(annot['x'], annot['y'])
 
 
 # ---------------------------------------------------------------------------
