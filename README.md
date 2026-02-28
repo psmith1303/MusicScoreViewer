@@ -70,5 +70,5 @@ instead (49 of 60 pass).
 
 ### File formats
 
-- **`setlists.json`** — setlist definitions; see `docs/setlist-file-format.md` for the full specification.
+- **`setlists.json`** — setlist definitions, written to the root of the music library folder so setlists travel with the collection; see `docs/setlist-file-format.md` for the full specification.
 - **`<score>.json`** — annotation sidecar written alongside each PDF; versioned JSON containing per-page annotation lists and rotation overrides.
