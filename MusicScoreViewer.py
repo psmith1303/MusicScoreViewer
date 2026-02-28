@@ -968,7 +968,8 @@ class MusicScoreApp:
         )
 
         # --- Setlist state ---
-        self.setlists            = SafeJSON.load(SETLIST_PATH)
+        self.library_dir: str = ""
+        self.setlists            = {}   # loaded/reloaded when library_dir is set
         self._session: SetlistSession | None = None
 
         # --- Combo typeahead ---
@@ -1289,6 +1290,10 @@ class MusicScoreApp:
         self._apply_filters()
         self.config.set("behavior", "last_directory", portable_path(path))
         self.root.config(cursor="")
+        self.library_dir = path
+        self.setlists = SafeJSON.load(self._setlist_path())
+        self._refresh_setlist_list()
+        self._refresh_setlist_items()
 
     def _clear_composer_filter(self) -> None:
         self.cb_comp.set("")
@@ -1474,8 +1479,14 @@ class MusicScoreApp:
             self._refresh_setlist_items()
             self.tree_sl.selection_set(new_idx)
 
+    def _setlist_path(self) -> str:
+        """Return the setlists.json path inside the current music directory."""
+        if self.library_dir:
+            return os.path.join(self.library_dir, "setlists.json")
+        return SETLIST_PATH
+
     def _save_setlists(self) -> None:
-        SafeJSON.save(SETLIST_PATH, self.setlists)
+        SafeJSON.save(self._setlist_path(), self.setlists)
 
     def _quick_add_to_setlist(self) -> None:
         """Add currently viewed score to a setlist."""
