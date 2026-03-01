@@ -1,6 +1,6 @@
 # Setlist File Format
 
-**File:** `setlists.json` (written to the writable app directory alongside `config.json`)
+**File:** `setlists.json` (written to the root of the music library folder)
 
 ---
 
@@ -122,23 +122,25 @@ saved on Windows loads correctly on WSL and vice versa.
 
 ## File location
 
-The file is written to the **writable app directory**, resolved at startup by
-`get_writable_app_dir()` in the following priority order:
+The file is written to the **root of the currently-loaded music library folder**,
+so setlists travel with the music collection (e.g. on a shared or portable drive).
 
-1. Same directory as the executable / script (portable mode).
-2. `~/.music_score_viewer/` (user home, if the app directory is read-only).
-3. System temp directory (last resort).
+The path is resolved by `_setlist_path()` on `MusicScoreApp`:
 
-The path constant `SETLIST_PATH` in the source is
-`os.path.join(APP_DIR, "setlists.json")`.
+- When a library folder is loaded: `os.path.join(self.library_dir, "setlists.json")`.
+- Fallback (no folder loaded yet): `os.path.join(APP_DIR, "setlists.json")` — the
+  writable app directory resolved by `get_writable_app_dir()`.
+
+Switching to a different library folder reloads setlists from that folder automatically.
 
 ---
 
 ## Persistence
 
-- Loaded once at startup via `SafeJSON.load(SETLIST_PATH)`.
+- Loaded (or reloaded) whenever a music library folder is scanned, via
+  `SafeJSON.load(self._setlist_path())`.
 - Written after every mutation (add setlist, rename, delete, reorder, add/remove
-  song) via `SafeJSON.save(SETLIST_PATH, self.setlists)`.
+  song) via `SafeJSON.save(self._setlist_path(), self.setlists)`.
 - `SafeJSON` writes atomically (temp file + `os.replace`) to avoid corruption on
   power loss.
 - If the file is absent, `SafeJSON.load` returns `{}` (no setlists).
