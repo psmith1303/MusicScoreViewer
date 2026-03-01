@@ -2,9 +2,15 @@
 """
 Music Score Viewer
 ==================
-Version: 1.7.3
+Version: 1.7.4
 
 A robust Python application to view and annotate PDF music scores.
+
+Changes in v1.7.4:
+22. IMPROVEMENT: setlists.json is now stored in the root of the music library
+    folder rather than the app directory, so setlists travel with the music
+    collection (e.g. on a shared or portable drive). Switching to a different
+    folder automatically reloads the setlists for that folder.
 
 Changes in v1.7.3:
 19. FIX: SafeJSON.save now returns bool and shows a visible error dialog on
@@ -128,7 +134,7 @@ SETLIST_PATH = os.path.join(APP_DIR, "setlists.json")
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG = {
-    "version": "1.7.3",
+    "version": "1.7.4",
     "ui": {
         "window_size": "1200x900",
         "bg_color": "#333333",
