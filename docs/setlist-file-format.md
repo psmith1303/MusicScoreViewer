@@ -150,7 +150,12 @@ Switching to a different library folder reloads setlists from that folder automa
 
 ## Editing by hand
 
-The file is plain JSON and can be edited in any text editor.
+For Emacs users, `setlist-editor.el` (project root) provides a friendlier
+alternative: `M-x setlist-edit` opens the file as aligned org-mode tables
+where page numbers can be changed with standard table navigation, and
+`C-c C-s` writes back to JSON.  No raw JSON editing required.
+
+For other editors, the file is plain JSON and can be edited directly.
 Guidelines:
 
 - Ensure the top-level structure is a JSON **object** (curly braces), not an array.
