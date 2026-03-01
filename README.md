@@ -57,6 +57,34 @@ instead (49 of 60 pass).
 | `tests/test_rotation.py` | 17 | 17 | 17 | `_rotate_annotation_coords()` rotation transform maths: identity, known corners, CW/CCW inverse, composition, bounds |
 | `tests/test_safe_json.py` | 21 | 21 | 20 | `SafeJSON.load()` and `SafeJSON.save()`: missing files, valid JSON, corrupt JSON, missing directory, atomic write, unicode, round-trips |
 
+## Emacs Editing
+
+`setlist-editor.el` lets you edit `setlists.json` in Emacs without touching
+raw JSON.  Each setlist becomes an org level-1 heading; each song is a table
+row.  Requires Emacs 27+; no external packages needed.
+
+### Setup
+
+```elisp
+;; In your Emacs init file, or load manually with M-x load-file:
+(load "/path/to/MusicScoreViewer/setlist-editor.el")
+```
+
+### Usage
+
+1. `M-x setlist-edit` — prompts for `setlists.json` and opens it as org tables.
+2. Edit cells with standard org table commands:
+   - **Tab** — move to the next cell (auto-aligns the row)
+   - **C-c C-c** — re-align the current table
+3. **C-c C-s** — write the tables back to JSON and save the file.
+4. **C-c C-q** — quit (prompts if there are unsaved changes).
+
+The org buffer is ephemeral (never saved as a file). `C-x C-s` is intercepted
+and redirected to the minibuffer hint. A blank **End** cell round-trips as
+JSON `null` (meaning "last page of the PDF").
+
+---
+
 ## Architecture
 
 ### Key classes and module-level constructs
