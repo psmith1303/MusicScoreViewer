@@ -2,9 +2,18 @@
 """
 Music Score Viewer
 ==================
-Version: 1.7.4
+Version: 1.7.5
 
 A robust Python application to view and annotate PDF music scores.
+
+Changes in v1.7.5:
+23. FIX: SafeJSON.save no longer hangs when the target file is on a network
+    drive. The temp file is now written to the local system temp directory
+    instead of the target directory, avoiding SMB/CIFS blocking on slow or
+    mapped drives.
+24. FIX: SafeJSON cross-device fallback now uses shutil.copyfile instead of
+    shutil.copy2, avoiding EPERM errors on SMB/CIFS mounts (e.g. WSL /mnt/z)
+    where setting file metadata (timestamps/permissions) is not permitted.
 
 Changes in v1.7.4:
 22. IMPROVEMENT: setlists.json is now stored in the root of the music library
@@ -135,7 +144,7 @@ SETLIST_PATH = os.path.join(APP_DIR, "setlists.json")
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG = {
-    "version": "1.7.4",
+    "version": "1.7.5",
     "ui": {
         "window_size": "1200x900",
         "bg_color": "#333333",

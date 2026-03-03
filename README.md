@@ -55,7 +55,7 @@ instead (49 of 60 pass).
 |---|---|---|---|---|
 | `tests/test_path_utils.py` | 22 | 18 | 12 | `normalize_path()` and `portable_path()`, including WSL↔Windows translation and round-trip invariants |
 | `tests/test_rotation.py` | 17 | 17 | 17 | `_rotate_annotation_coords()` rotation transform maths: identity, known corners, CW/CCW inverse, composition, bounds |
-| `tests/test_safe_json.py` | 21 | 21 | 20 | `SafeJSON.load()` and `SafeJSON.save()`: missing files, valid JSON, corrupt JSON, missing directory, atomic write, unicode, round-trips |
+| `tests/test_safe_json.py` | 21 | 21 | 20 | `SafeJSON.load()` and `SafeJSON.save()`: missing files, valid JSON, corrupt JSON, missing directory, cross-device/network-drive write, unicode, round-trips |
 
 ## Emacs Editing
 
