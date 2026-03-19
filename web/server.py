@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 from .core import (
+    AnnotationConflictError,
     SafeJSON,
     SafeJSONError,
     Score,
@@ -475,6 +476,7 @@ class SaveAnnotationsRequest(BaseModel):
     path: str
     pages: dict
     rotations: dict
+    expected_etag: str | None = None
 
 
 @app.put("/api/annotations")
@@ -483,11 +485,19 @@ def put_annotations(req: SaveAnnotationsRequest):
     if not os.path.isfile(resolved):
         raise HTTPException(status_code=404, detail="PDF not found")
     try:
-        save_annotations(resolved, req.pages, req.rotations)
+        new_etag = save_annotations(
+            resolved, req.pages, req.rotations,
+            expected_etag=req.expected_etag,
+        )
+    except AnnotationConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail="Annotations were modified by another session",
+        )
     except SafeJSONError:
         logging.exception("Failed to save annotations for %s", resolved)
         raise HTTPException(status_code=500, detail="Failed to save annotations")
-    return {"ok": True}
+    return {"ok": True, "etag": new_etag}
 
 
 # ---------------------------------------------------------------------------

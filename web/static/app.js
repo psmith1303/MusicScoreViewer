@@ -195,6 +195,12 @@ let currentStroke = [];   // [{x, y}, ...] in CSS pixels relative to annot canva
 let undoStacks = {};      // {pageNum: [snapshot, ...]}
 const UNDO_DEPTH = 20;
 
+// Annotation etag (multi-user conflict detection)
+let annotationEtag = null;
+
+// Page cache for memory management
+let cachedPages = new Map(); // pageNum -> pdf.js page object
+
 // Setlist state
 let currentView = "library";
 let returnView = "library";
@@ -391,11 +397,14 @@ async function openScore(score) {
     const data = await api(`/api/annotations?path=${encodeURIComponent(score.filepath)}`);
     annotations = data.pages || {};
     rotations = data.rotations || {};
+    annotationEtag = data.etag || null;
   } catch {
     annotations = {};
     rotations = {};
+    annotationEtag = null;
   }
   undoStacks = {};
+  cachedPages.clear();
 
   try {
     const loadingTask = pdfjsLib.getDocument(`/api/pdf?path=${encodeURIComponent(score.filepath)}`);
@@ -419,6 +428,7 @@ function autoSideBySide() {
 }
 
 function closeScore() {
+  cleanupAllPages();
   pdfDoc = null;
   currentScore = null;
   totalPages = 0;
@@ -427,6 +437,7 @@ function closeScore() {
   rotations = {};
   undoStacks = {};
   pageLayouts = [];
+  annotationEtag = null;
   setlistPlayback = null;
   setTool("nav");
   canvas1.width = 0;
@@ -466,13 +477,51 @@ async function renderPage() {
     }
 
     drawAnnotations();
+    cleanupOldPages();
+    prefetchNextPage();
   } finally {
     rendering = false;
   }
 }
 
+function cleanupOldPages() {
+  // Keep currently displayed pages + neighbours; release the rest
+  const hot = new Set();
+  for (const layout of pageLayouts) {
+    hot.add(layout.page);
+    hot.add(layout.page + 1);
+    if (layout.page > 1) hot.add(layout.page - 1);
+  }
+  for (const [num, page] of cachedPages) {
+    if (!hot.has(num)) {
+      page.cleanup();
+      cachedPages.delete(num);
+    }
+  }
+}
+
+function cleanupAllPages() {
+  for (const page of cachedPages.values()) {
+    page.cleanup();
+  }
+  cachedPages.clear();
+}
+
+async function prefetchNextPage() {
+  if (!pdfDoc) return;
+  const step = sideBySide ? 2 : 1;
+  const next = currentPage + step;
+  if (next <= totalPages && !cachedPages.has(next)) {
+    try {
+      const page = await pdfDoc.getPage(next);
+      cachedPages.set(next, page);
+    } catch { /* ignore prefetch failures */ }
+  }
+}
+
 async function renderSinglePage(pageNum, pdfCanvas, annotCanvas) {
   const page = await pdfDoc.getPage(pageNum);
+  cachedPages.set(pageNum, page);
   const rot = (rotations[String(pageNum - 1)] || 0) % 360;
 
   // Calculate scale to fit the container
@@ -698,19 +747,30 @@ function rotatePage(delta) {
 btnRotCW.addEventListener("click", () => rotatePage(90));
 btnRotCCW.addEventListener("click", () => rotatePage(-90));
 
-async function saveAnnotations() {
+async function saveAnnotations(force = false) {
   if (!currentScore) return;
   try {
-    await api("/api/annotations", {
+    const payload = {
+      path: currentScore.filepath,
+      pages: annotations,
+      rotations: rotations,
+    };
+    if (!force && annotationEtag !== null) {
+      payload.expected_etag = annotationEtag;
+    }
+    const result = await api("/api/annotations", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        path: currentScore.filepath,
-        pages: annotations,
-        rotations: rotations,
-      }),
+      body: JSON.stringify(payload),
     });
+    if (result.etag) {
+      annotationEtag = result.etag;
+    }
   } catch (err) {
+    if (err.message && err.message.includes("409")) {
+      showConflictDialog();
+      return;
+    }
     console.error("Failed to save annotations:", err);
   }
 }
@@ -1018,7 +1078,7 @@ document.addEventListener("keydown", (e) => {
   }
 
   // Dialog open — don't handle
-  if (textDialog.open || dirDialog.open || setlistNameDialog.open || songPickerDialog.open || setlistPickerDialog.open || loginDialog.open) return;
+  if (textDialog.open || dirDialog.open || setlistNameDialog.open || songPickerDialog.open || setlistPickerDialog.open || loginDialog.open || conflictDialog.open) return;
 
   if (!pdfDoc) return;
 
@@ -1443,11 +1503,14 @@ async function openSetlistSong(index, goToEnd = false) {
     const data = await api(`/api/annotations?path=${encodeURIComponent(song.path)}`);
     annotations = data.pages || {};
     rotations = data.rotations || {};
+    annotationEtag = data.etag || null;
   } catch {
     annotations = {};
     rotations = {};
+    annotationEtag = null;
   }
   undoStacks = {};
+  cachedPages.clear();
 
   try {
     const loadingTask = pdfjsLib.getDocument(`/api/pdf?path=${encodeURIComponent(song.path)}`);
@@ -1685,6 +1748,38 @@ if ("serviceWorker" in navigator) {
     console.warn("SW registration failed:", err);
   });
 }
+
+// ---------------------------------------------------------------------------
+// Conflict dialog (multi-user awareness)
+// ---------------------------------------------------------------------------
+
+const conflictDialog = $("#conflict-dialog");
+const conflictReload = $("#conflict-reload");
+const conflictForce = $("#conflict-force");
+
+function showConflictDialog() {
+  conflictDialog.showModal();
+}
+
+conflictReload.addEventListener("click", async () => {
+  conflictDialog.close();
+  if (!currentScore) return;
+  try {
+    const data = await api(`/api/annotations?path=${encodeURIComponent(currentScore.filepath)}`);
+    annotations = data.pages || {};
+    rotations = data.rotations || {};
+    annotationEtag = data.etag || null;
+    undoStacks = {};
+    renderPage();
+  } catch (err) {
+    console.error("Failed to reload annotations:", err);
+  }
+});
+
+conflictForce.addEventListener("click", () => {
+  conflictDialog.close();
+  saveAnnotations(true);
+});
 
 // ---------------------------------------------------------------------------
 // Login

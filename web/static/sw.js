@@ -1,4 +1,4 @@
-const CACHE_NAME = "folio-v1";
+const CACHE_NAME = "folio-v2";
 const SHELL_URLS = [
   "/",
   "/app.css",

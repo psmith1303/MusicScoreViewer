@@ -253,6 +253,89 @@ class TestPutAnnotations:
         assert "0" not in data["rotations"]
         assert data["rotations"]["1"] == 90
 
+    def test_save_returns_etag(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        scores = client.get("/api/library").json()["scores"]
+        path = scores[0]["filepath"]
+
+        resp = client.put("/api/annotations", json={
+            "path": path, "pages": {}, "rotations": {}
+        })
+        assert resp.status_code == 200
+        assert "etag" in resp.json()
+        assert len(resp.json()["etag"]) > 0
+
+    def test_get_returns_etag(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        scores = client.get("/api/library").json()["scores"]
+        path = scores[0]["filepath"]
+
+        # Save to create the sidecar
+        client.put("/api/annotations", json={
+            "path": path, "pages": {}, "rotations": {}
+        })
+        resp = client.get(f"/api/annotations?path={path}")
+        assert "etag" in resp.json()
+
+    def test_save_with_correct_etag_succeeds(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        scores = client.get("/api/library").json()["scores"]
+        path = scores[0]["filepath"]
+
+        # Initial save
+        resp = client.put("/api/annotations", json={
+            "path": path, "pages": {}, "rotations": {}
+        })
+        etag = resp.json()["etag"]
+
+        # Save with the correct etag
+        resp = client.put("/api/annotations", json={
+            "path": path, "pages": {"0": []}, "rotations": {},
+            "expected_etag": etag,
+        })
+        assert resp.status_code == 200
+
+    def test_save_with_stale_etag_returns_409(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        scores = client.get("/api/library").json()["scores"]
+        path = scores[0]["filepath"]
+
+        # Initial save — get etag
+        resp = client.put("/api/annotations", json={
+            "path": path, "pages": {}, "rotations": {}
+        })
+        stale_etag = resp.json()["etag"]
+
+        # Concurrent edit (changes the file)
+        client.put("/api/annotations", json={
+            "path": path,
+            "pages": {"0": [{"uuid": "other", "type": "ink",
+                             "points": [[0.1, 0.2]], "color": "red",
+                             "width": 1}]},
+            "rotations": {}
+        })
+
+        # Try to save with the stale etag
+        resp = client.put("/api/annotations", json={
+            "path": path, "pages": {}, "rotations": {},
+            "expected_etag": stale_etag,
+        })
+        assert resp.status_code == 409
+
+    def test_save_without_etag_always_succeeds(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        scores = client.get("/api/library").json()["scores"]
+        path = scores[0]["filepath"]
+
+        # Save without expected_etag — backwards compatible, no conflict check
+        client.put("/api/annotations", json={
+            "path": path, "pages": {}, "rotations": {}
+        })
+        resp = client.put("/api/annotations", json={
+            "path": path, "pages": {"0": []}, "rotations": {}
+        })
+        assert resp.status_code == 200
+
     def test_path_traversal_blocked(self, client, library_with_pdfs):
         state.set_library(library_with_pdfs)
         resp = client.put("/api/annotations", json={

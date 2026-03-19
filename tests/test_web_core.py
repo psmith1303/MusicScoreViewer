@@ -8,10 +8,12 @@ import pytest
 
 from web.core import (
     ANNOTATION_VERSION,
+    AnnotationConflictError,
     SafeJSON,
     SafeJSONError,
     Score,
     annotation_sidecar_path,
+    annotations_etag,
     load_annotations,
     normalize_path,
     portable_path,
@@ -246,6 +248,33 @@ class TestLoadAnnotations:
         assert data["pages"]["0"][0]["type"] == "ink"
 
 
+class TestAnnotationsEtag:
+    def test_no_sidecar_returns_empty(self, tmp_path):
+        pdf = tmp_path / "score.pdf"
+        pdf.touch()
+        assert annotations_etag(str(pdf)) == ""
+
+    def test_etag_changes_after_save(self, tmp_path):
+        pdf = tmp_path / "score.pdf"
+        pdf.touch()
+        save_annotations(str(pdf), {}, {})
+        etag1 = annotations_etag(str(pdf))
+        assert etag1 != ""
+
+        save_annotations(str(pdf), {"0": [{"uuid": "a", "type": "ink",
+                         "points": [[0.1, 0.2]], "color": "red", "width": 1}]}, {})
+        etag2 = annotations_etag(str(pdf))
+        assert etag2 != etag1
+
+    def test_load_annotations_includes_etag(self, tmp_path):
+        pdf = tmp_path / "score.pdf"
+        pdf.touch()
+        save_annotations(str(pdf), {}, {})
+        data = load_annotations(str(pdf))
+        assert "etag" in data
+        assert len(data["etag"]) > 0
+
+
 class TestSaveAnnotations:
     def test_save_and_reload(self, tmp_path):
         pdf = tmp_path / "score.pdf"
@@ -260,3 +289,34 @@ class TestSaveAnnotations:
         # Rotation 0 should be filtered out
         assert "1" not in data["rotations"]
         assert data["rotations"]["0"] == 90
+
+    def test_save_returns_new_etag(self, tmp_path):
+        pdf = tmp_path / "score.pdf"
+        pdf.touch()
+        etag = save_annotations(str(pdf), {}, {})
+        assert etag != ""
+
+    def test_save_with_correct_etag_succeeds(self, tmp_path):
+        pdf = tmp_path / "score.pdf"
+        pdf.touch()
+        etag = save_annotations(str(pdf), {}, {})
+        # Save again with the correct etag
+        new_etag = save_annotations(str(pdf), {}, {"0": 90}, expected_etag=etag)
+        assert new_etag != etag
+
+    def test_save_with_stale_etag_raises(self, tmp_path):
+        pdf = tmp_path / "score.pdf"
+        pdf.touch()
+        etag = save_annotations(str(pdf), {}, {})
+        # Simulate concurrent edit
+        save_annotations(str(pdf), {"0": []}, {})
+        # Now try to save with the stale etag
+        with pytest.raises(AnnotationConflictError):
+            save_annotations(str(pdf), {}, {}, expected_etag=etag)
+
+    def test_save_without_etag_always_succeeds(self, tmp_path):
+        pdf = tmp_path / "score.pdf"
+        pdf.touch()
+        save_annotations(str(pdf), {}, {})
+        # Save without etag — no conflict check
+        save_annotations(str(pdf), {"0": []}, {})

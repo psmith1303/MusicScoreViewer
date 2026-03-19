@@ -1,10 +1,11 @@
 """
 Folio — core business logic.
 
-This module contains no Tkinter dependencies and is used by the web backend.
-Error conditions raise exceptions instead of showing message dialogs.
+Error conditions raise exceptions; the calling HTTP layer converts them
+to proper API responses.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -219,15 +220,34 @@ def pdf_page_count(filepath: str) -> int:
 ANNOTATION_VERSION = 2
 
 
+class AnnotationConflictError(Exception):
+    """Raised when an annotation save conflicts with a concurrent edit."""
+
+
 def annotation_sidecar_path(pdf_path: str) -> str:
     """Return the sidecar JSON path for a given PDF."""
     return os.path.splitext(normalize_path(pdf_path))[0] + ".json"
 
 
+def annotations_etag(pdf_path: str) -> str:
+    """Compute an etag from the annotation sidecar file content.
+
+    Returns an empty string if no sidecar exists.
+    """
+    sidecar = annotation_sidecar_path(pdf_path)
+    if not os.path.exists(sidecar):
+        return ""
+    try:
+        with open(sidecar, 'rb') as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
 def load_annotations(pdf_path: str) -> dict:
     """Load the annotation sidecar JSON for *pdf_path*.
 
-    Returns a dict with keys: version, rotations, pages.
+    Returns a dict with keys: version, rotations, pages, etag.
     Migrates old formats and assigns missing UUIDs.
     """
     sidecar = annotation_sidecar_path(pdf_path)
@@ -263,11 +283,28 @@ def load_annotations(pdf_path: str) -> dict:
         "version": ANNOTATION_VERSION,
         "rotations": rotations,
         "pages": pages,
+        "etag": annotations_etag(pdf_path),
     }
 
 
-def save_annotations(pdf_path: str, pages: dict, rotations: dict) -> None:
-    """Save annotations and rotations to the sidecar JSON."""
+def save_annotations(
+    pdf_path: str,
+    pages: dict,
+    rotations: dict,
+    expected_etag: str | None = None,
+) -> str:
+    """Save annotations and rotations to the sidecar JSON.
+
+    If *expected_etag* is provided, the current file's etag must match or
+    an ``AnnotationConflictError`` is raised.  Returns the new etag.
+    """
+    if expected_etag is not None:
+        current = annotations_etag(pdf_path)
+        if current != expected_etag:
+            raise AnnotationConflictError(
+                "Annotations were modified by another session"
+            )
+
     sidecar = annotation_sidecar_path(pdf_path)
     # Only save non-zero rotations
     clean_rot = {k: v for k, v in rotations.items() if v % 360 != 0}
@@ -277,6 +314,7 @@ def save_annotations(pdf_path: str, pages: dict, rotations: dict) -> None:
         "pages": pages,
     }
     SafeJSON.save(sidecar, data)
+    return annotations_etag(pdf_path)
 
 
 # ---------------------------------------------------------------------------

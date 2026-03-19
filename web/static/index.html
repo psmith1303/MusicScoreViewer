@@ -270,6 +270,20 @@
   </dialog>
 
   <!-- ================================================================== -->
+  <!-- Conflict dialog (multi-user awareness)                             -->
+  <!-- ================================================================== -->
+  <dialog id="conflict-dialog">
+    <form method="dialog">
+      <h3>Annotation Conflict</h3>
+      <p>These annotations were modified in another session. Your changes could not be saved.</p>
+      <div class="dialog-buttons">
+        <button type="button" id="conflict-reload">Reload (discard mine)</button>
+        <button type="button" id="conflict-force">Save anyway (overwrite)</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ================================================================== -->
   <!-- Login dialog                                                       -->
   <!-- ================================================================== -->
   <dialog id="login-dialog">

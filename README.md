@@ -76,8 +76,8 @@ python3 -m pytest -v
 
 | File | Tests | What is tested |
 |---|---|---|
-| `tests/test_web_core.py` | 29 | `web.core` module: path utils, SafeJSON, Score parsing, library scanning (.exclude support), annotation load/save/migration |
-| `tests/test_web_api.py` | 48 | FastAPI endpoints: config, library, PDF serving, annotation CRUD, rotation, setlist CRUD/rename, PDF export, path traversal, security, auth |
+| `tests/test_web_core.py` | 36 | `web.core` module: path utils, SafeJSON, Score parsing, library scanning (.exclude support), annotation load/save/migration, etag, conflict detection |
+| `tests/test_web_api.py` | 53 | FastAPI endpoints: config, library, PDF serving, annotation CRUD, rotation, etag/conflict, setlist CRUD/rename, PDF export, path traversal, security, auth |
 
 ## Emacs Editing
 

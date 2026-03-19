@@ -67,10 +67,13 @@
 - 4 new export tests with real PDF fixture via pymupdf
 - 65 tests passing (27 core + 38 API)
 
-* Backlog
-** TODO Performance: lazy rendering
-- Only render visible pages + 1 ahead (current approach renders 1–2)
-- Offscreen page cleanup to reduce memory usage
-** TODO Multi-user awareness
-- Show a warning if two browsers have the same PDF open
-- Alternatively, last-write-wins with a version counter
+** DONE Phase 7 — Performance and multi-user awareness
+- Lazy page management: track cached pdf.js page objects, clean up offscreen pages, prefetch next page
+- Multi-user conflict detection: etag-based versioning on annotation saves
+- Backend: =annotations_etag()= hashes sidecar file content; =save_annotations()= checks expected etag
+- Frontend: stores etag on load, sends with saves; 409 triggers conflict dialog (reload or force-save)
+- =AnnotationConflictError= raised on stale saves; API returns 409
+- Stale docstring cleanup in =core.py=
+- Service worker cache bumped to v2
+- 13 new tests (etag, conflict detection, backwards compat)
+- 89 tests passing (36 core + 53 API)
