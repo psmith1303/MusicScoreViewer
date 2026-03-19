@@ -506,3 +506,48 @@ dialog p {
 .hidden {
   display: none !important;
 }
+
+/* ================================================================== */
+/* PWA standalone safe areas (notch / home indicator)                 */
+/* ================================================================== */
+
+@supports (padding: env(safe-area-inset-top)) {
+  #topbar {
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-top: env(safe-area-inset-top);
+    height: calc(40px + env(safe-area-inset-top));
+  }
+  #library-view, #setlist-view, #setlist-detail, #viewer {
+    height: calc(100vh - 40px - env(safe-area-inset-top));
+  }
+  #viewer-toolbar, #setlist-detail-toolbar {
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+}
+
+/* ================================================================== */
+/* Responsive — compact toolbar on narrow screens                    */
+/* ================================================================== */
+
+@media (max-width: 768px) {
+  #viewer-toolbar {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 8px;
+  }
+  #color-swatches {
+    gap: 2px;
+  }
+  .swatch {
+    width: 14px;
+    height: 14px;
+  }
+  #size-label {
+    display: none;
+  }
+  .toolbar-sep {
+    display: none;
+  }
+}

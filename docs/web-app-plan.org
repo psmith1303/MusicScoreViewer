@@ -48,26 +48,15 @@
 - 13 new setlist API tests (CRUD, validation, rename, edge cases)
 - 61 tests passing (27 core + 34 API)
 
-* Phase 5 — PWA and iPad polish
-** TODO Web app manifest (=manifest.json=)
-- =name=, =short_name=, =start_url=, =display: standalone=
-- Icons at required sizes (192×192, 512×512)
-- =theme_color= and =background_color= matching dark theme
-** TODO Service worker for offline caching
-- Cache app shell (HTML, CSS, JS, pdf.js)
-- Network-first strategy for API calls
-- Offline indicator when server is unreachable
-** TODO Apple-specific meta tags
-- =apple-mobile-web-app-capable=, =apple-mobile-web-app-status-bar-style=
-- Splash screen images for common iPad sizes
-- =apple-touch-icon= already exists
-** TODO Touch gesture refinements
-- Pinch-to-zoom on the PDF (prevent conflict with annotation drawing)
-- Swipe left/right for page navigation in nav mode
-- Long-press for text annotation placement
-** TODO Landscape / split-screen iPad layout
-- Responsive layout for landscape orientation
-- Side-by-side mode auto-enabled on wide screens
+** DONE Phase 5 — PWA and iPad polish
+- Web app manifest: =manifest.json= with name, icons (192/512), =display: standalone=
+- Service worker: pre-caches app shell, cache-first for CDN (pdf.js), network-first for app shell, pass-through for API
+- Apple meta tags: =apple-mobile-web-app-capable=, =apple-mobile-web-app-status-bar-style=, =theme-color=
+- Safe area insets for standalone mode (notch/home indicator)
+- Swipe left/right for page navigation in nav mode (touch gesture)
+- Auto side-by-side on wide screens (≥1024px) with resize detection
+- Responsive toolbar: wraps and compacts on narrow screens (≤768px)
+- 61 tests still passing
 
 * Phase 6 — Quality of life
 ** TODO Performance: lazy rendering

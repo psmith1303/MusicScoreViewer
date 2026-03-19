@@ -990,7 +990,10 @@ let resizeTimer = null;
 window.addEventListener("resize", () => {
   if (resizeTimer) clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (pdfDoc) renderPage();
+    if (pdfDoc) {
+      checkAutoSideBySide();
+      renderPage();
+    }
   }, 150);
 });
 
@@ -1334,6 +1337,67 @@ dirDialog.addEventListener("close", async () => {
     libraryStatus.textContent = `Error: ${err.message}`;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Touch gestures (swipe navigation in nav mode)
+// ---------------------------------------------------------------------------
+
+let touchStartX = null;
+let touchStartY = null;
+const SWIPE_THRESHOLD = 50; // minimum px to register a swipe
+
+for (const ac of [annotCanvas1, annotCanvas2]) {
+  ac.addEventListener("touchstart", (e) => {
+    if (activeTool !== "nav") return;
+    if (e.touches.length !== 1) return;
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+
+  ac.addEventListener("touchend", (e) => {
+    if (activeTool !== "nav" || touchStartX === null) return;
+    if (e.changedTouches.length !== 1) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    touchStartX = null;
+    touchStartY = null;
+
+    // Only trigger if the horizontal swipe is dominant
+    if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
+      if (dx < 0) nextPage();   // swipe left → next
+      else prevPage();          // swipe right → prev
+    }
+  }, { passive: true });
+}
+
+// ---------------------------------------------------------------------------
+// Auto side-by-side on wide screens
+// ---------------------------------------------------------------------------
+
+function checkAutoSideBySide() {
+  if (!pdfDoc) return;
+  const wide = window.innerWidth >= 1024;
+  if (wide !== sideBySide) {
+    sideBySide = wide;
+    btnSideBySide.classList.toggle("active", sideBySide);
+    btnZoomFit.classList.toggle("active", !sideBySide);
+    renderPage();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Service worker
+// ---------------------------------------------------------------------------
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch((err) => {
+    console.warn("SW registration failed:", err);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Init
