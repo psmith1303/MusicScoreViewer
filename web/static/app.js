@@ -266,6 +266,7 @@ function closeScore() {
   rotations = {};
   undoStacks = {};
   pageLayouts = [];
+  setTool("nav");
   canvas1.width = 0;
   canvas1.height = 0;
   canvas2.width = 0;
