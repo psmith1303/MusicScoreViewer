@@ -414,15 +414,35 @@ async function openScore(score) {
     currentPage = 1;
     pageInput.max = totalPages;
     pageInput.value = 1;
-    autoSideBySide();
+    await autoSideBySide();
     renderPage();
   } catch (err) {
     pdfContainer.innerHTML = `<p style="color:#f88;padding:20px">Failed to load PDF: ${esc(err.message)}</p>`;
   }
 }
 
-function autoSideBySide() {
-  sideBySide = window.innerWidth >= 1024;
+async function autoSideBySide() {
+  // Only use 2-up when two pages fit without reducing the zoom level.
+  // Compare the fit-scale (full width for one page) with the dual-scale
+  // (half width for each page).  If height is the limiting dimension in
+  // both cases the scales are equal and 2-up is free.
+  if (!pdfDoc || totalPages < 2 || currentPage >= totalPages) {
+    sideBySide = false;
+  } else {
+    const page = await pdfDoc.getPage(currentPage);
+    cachedPages.set(currentPage, page);
+    const rot = (rotations[String(currentPage - 1)] || 0) % 360;
+    const vp = page.getViewport({ scale: 1, rotation: rot });
+
+    const containerH = pdfContainer.clientHeight - 16;
+    const fitW = pdfContainer.clientWidth - 16;
+    const dualW = (pdfContainer.clientWidth - 20) / 2;
+
+    const fitScale = Math.min(fitW / vp.width, containerH / vp.height);
+    const dualScale = Math.min(dualW / vp.width, containerH / vp.height);
+
+    sideBySide = dualScale >= fitScale;
+  }
   btnSideBySide.classList.toggle("active", sideBySide);
   btnZoomFit.classList.toggle("active", !sideBySide);
 }
@@ -1136,9 +1156,9 @@ document.addEventListener("keydown", (e) => {
 let resizeTimer = null;
 window.addEventListener("resize", () => {
   if (resizeTimer) clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => {
+  resizeTimer = setTimeout(async () => {
     if (pdfDoc) {
-      checkAutoSideBySide();
+      await checkAutoSideBySide();
       renderPage();
     }
   }, 150);
@@ -1522,7 +1542,7 @@ async function openSetlistSong(index, goToEnd = false) {
     pageInput.max = totalPages;
     currentPage = goToEnd ? range.max : range.min;
     pageInput.value = currentPage;
-    autoSideBySide();
+    await autoSideBySide();
     renderPage();
   } catch (err) {
     pdfContainer.innerHTML = `<p style="color:#f88;padding:20px">Failed to load PDF: ${esc(err.message)}</p>`;
@@ -1598,12 +1618,13 @@ for (const ac of [annotCanvas1, annotCanvas2]) {
 // Auto side-by-side on wide screens
 // ---------------------------------------------------------------------------
 
-function checkAutoSideBySide() {
+async function checkAutoSideBySide() {
   if (!pdfDoc) return;
-  const wide = window.innerWidth >= 1024;
-  if (wide !== sideBySide) {
-    autoSideBySide();
-  }
+  const prev = sideBySide;
+  await autoSideBySide();
+  // Only trigger re-render from the resize handler if the mode changed;
+  // the resize handler already calls renderPage() unconditionally.
+  return prev !== sideBySide;
 }
 
 // ---------------------------------------------------------------------------
