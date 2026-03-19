@@ -11,7 +11,7 @@ Runs on any device with a browser, including iPad.
 - Metadata search by composer, title, and folder tags
 - Click-to-navigate: right/bottom half = next page, left/top half = previous
 - Keyboard shortcuts for page navigation and tool switching
-- Setlist management (planned)
+- Setlist management: create, edit, reorder, rename, delete, playback with page constraints
 
 ## Requirements
 - Python 3.10+
@@ -55,7 +55,7 @@ python3 -m pytest -v
 | File | Tests | What is tested |
 |---|---|---|
 | `tests/test_web_core.py` | 27 | `web.core` module: path utils, SafeJSON, Score parsing, library scanning, annotation load/save/migration |
-| `tests/test_web_api.py` | 21 | FastAPI endpoints: config, library listing/filtering/sorting, PDF serving, annotation CRUD, rotation round-trip, path traversal protection |
+| `tests/test_web_api.py` | 34 | FastAPI endpoints: config, library, PDF serving, annotation CRUD, rotation, setlist CRUD/rename, path traversal |
 
 ## Emacs Editing
 

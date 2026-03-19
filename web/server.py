@@ -274,6 +274,103 @@ def put_annotations(req: SaveAnnotationsRequest):
 
 
 # ---------------------------------------------------------------------------
+# Setlist endpoints
+# ---------------------------------------------------------------------------
+
+
+def _load_setlists() -> dict:
+    try:
+        return SafeJSON.load(state.setlist_path(), default={})
+    except SafeJSONError:
+        return {}
+
+
+def _save_setlists(data: dict) -> None:
+    SafeJSON.save(state.setlist_path(), data)
+
+
+@app.get("/api/setlists")
+def get_setlists():
+    data = _load_setlists()
+    return {
+        "setlists": [
+            {"name": name, "count": len(songs)}
+            for name, songs in sorted(data.items())
+        ],
+    }
+
+
+@app.get("/api/setlists/{name}")
+def get_setlist(name: str):
+    data = _load_setlists()
+    if name not in data:
+        raise HTTPException(status_code=404, detail="Setlist not found")
+    return {"name": name, "songs": data[name]}
+
+
+class CreateSetlistRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/setlists")
+def create_setlist(req: CreateSetlistRequest):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name cannot be empty")
+    data = _load_setlists()
+    if name in data:
+        raise HTTPException(status_code=409, detail="Setlist already exists")
+    data[name] = []
+    _save_setlists(data)
+    return {"ok": True, "name": name}
+
+
+class UpdateSetlistSongsRequest(BaseModel):
+    songs: list[dict]
+
+
+@app.put("/api/setlists/{name}")
+def update_setlist(name: str, req: UpdateSetlistSongsRequest):
+    data = _load_setlists()
+    if name not in data:
+        raise HTTPException(status_code=404, detail="Setlist not found")
+    data[name] = req.songs
+    _save_setlists(data)
+    return {"ok": True}
+
+
+@app.delete("/api/setlists/{name}")
+def delete_setlist(name: str):
+    data = _load_setlists()
+    if name not in data:
+        raise HTTPException(status_code=404, detail="Setlist not found")
+    del data[name]
+    _save_setlists(data)
+    return {"ok": True}
+
+
+class RenameSetlistRequest(BaseModel):
+    new_name: str
+
+
+@app.post("/api/setlists/{name}/rename")
+def rename_setlist(name: str, req: RenameSetlistRequest):
+    new_name = req.new_name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Name cannot be empty")
+    data = _load_setlists()
+    if name not in data:
+        raise HTTPException(status_code=404, detail="Setlist not found")
+    if new_name in data:
+        raise HTTPException(status_code=409, detail="Target name already exists")
+    new_data = {}
+    for k, v in data.items():
+        new_data[new_name if k == name else k] = v
+    _save_setlists(new_data)
+    return {"ok": True, "name": new_name}
+
+
+# ---------------------------------------------------------------------------
 # Serve the frontend
 # ---------------------------------------------------------------------------
 

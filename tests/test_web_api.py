@@ -14,6 +14,9 @@ from web.server import app, state
 def reset_state(tmp_path, monkeypatch):
     """Reset server state and isolate config writes to a temp file."""
     monkeypatch.setattr(srv, "WEB_CONFIG_PATH", str(tmp_path / "web_config.json"))
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    monkeypatch.setattr(srv, "CONFIG_DIR", str(config_dir))
     state.library_dir = ""
     state.scores = []
     yield
@@ -244,3 +247,108 @@ class TestPutAnnotations:
             "pages": {}, "rotations": {}
         })
         assert resp.status_code in (403, 404)
+
+
+# ---------------------------------------------------------------------------
+# Setlist CRUD
+# ---------------------------------------------------------------------------
+
+
+class TestSetlists:
+    def test_list_empty(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.get("/api/setlists")
+        assert resp.status_code == 200
+        assert resp.json()["setlists"] == []
+
+    def test_create(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.post("/api/setlists", json={"name": "My Set"})
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "My Set"
+
+        resp = client.get("/api/setlists")
+        assert len(resp.json()["setlists"]) == 1
+        assert resp.json()["setlists"][0]["name"] == "My Set"
+
+    def test_create_duplicate_returns_409(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "Dup"})
+        resp = client.post("/api/setlists", json={"name": "Dup"})
+        assert resp.status_code == 409
+
+    def test_create_empty_name_returns_400(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.post("/api/setlists", json={"name": "  "})
+        assert resp.status_code == 400
+
+    def test_get_setlist(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "Test"})
+        resp = client.get("/api/setlists/Test")
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Test"
+        assert resp.json()["songs"] == []
+
+    def test_get_nonexistent_returns_404(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.get("/api/setlists/Nope")
+        assert resp.status_code == 404
+
+    def test_update_songs(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "Gig"})
+        songs = [{"path": "a.pdf", "title": "A", "composer": "X",
+                  "start_page": 1, "end_page": None}]
+        resp = client.put("/api/setlists/Gig", json={"songs": songs})
+        assert resp.status_code == 200
+
+        resp = client.get("/api/setlists/Gig")
+        assert len(resp.json()["songs"]) == 1
+        assert resp.json()["songs"][0]["title"] == "A"
+
+    def test_update_nonexistent_returns_404(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.put("/api/setlists/Nope", json={"songs": []})
+        assert resp.status_code == 404
+
+    def test_delete(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "Gone"})
+        resp = client.delete("/api/setlists/Gone")
+        assert resp.status_code == 200
+
+        resp = client.get("/api/setlists")
+        assert resp.json()["setlists"] == []
+
+    def test_delete_nonexistent_returns_404(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.delete("/api/setlists/Nope")
+        assert resp.status_code == 404
+
+    def test_rename(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "Old"})
+        resp = client.post("/api/setlists/Old/rename",
+                           json={"new_name": "New"})
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "New"
+
+        resp = client.get("/api/setlists")
+        names = [s["name"] for s in resp.json()["setlists"]]
+        assert "New" in names
+        assert "Old" not in names
+
+    def test_rename_to_existing_returns_409(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "A"})
+        client.post("/api/setlists", json={"name": "B"})
+        resp = client.post("/api/setlists/A/rename",
+                           json={"new_name": "B"})
+        assert resp.status_code == 409
+
+    def test_rename_nonexistent_returns_404(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.post("/api/setlists/Nope/rename",
+                           json={"new_name": "X"})
+        assert resp.status_code == 404

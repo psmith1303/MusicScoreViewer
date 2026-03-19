@@ -58,6 +58,28 @@ const btnUndo = $("#btn-undo");
 const sizeSlider = $("#size-slider");
 const btnRotCCW = $("#btn-rot-ccw");
 const btnRotCW = $("#btn-rot-cw");
+const btnSetlists = $("#btn-setlists");
+const setlistView = $("#setlist-view");
+const setlistBody = $("#setlist-body");
+const setlistStatus = $("#setlist-status");
+const btnNewSetlist = $("#btn-new-setlist");
+const setlistDetailView = $("#setlist-detail");
+const setlistDetailName = $("#setlist-detail-name");
+const setlistSongsBody = $("#setlist-songs-body");
+const btnRenameSetlist = $("#btn-rename-setlist");
+const btnAddSong = $("#btn-add-song");
+const btnPlaySetlist = $("#btn-play-setlist");
+const setlistNameDialog = $("#setlist-name-dialog");
+const setlistNameDialogTitle = $("#setlist-name-dialog-title");
+const setlistNameInput = $("#setlist-name-input");
+const setlistNameCancel = $("#setlist-name-cancel");
+const songPickerDialog = $("#song-picker-dialog");
+const songSearch = $("#song-search");
+const songPickerList = $("#song-picker-list");
+const songStart = $("#song-start");
+const songEnd = $("#song-end");
+const songPickerCancel = $("#song-picker-cancel");
+const songPickerAdd = $("#song-picker-add");
 const textDialog = $("#text-dialog");
 const textDialogTitle = $("#text-dialog-title");
 const textInput = $("#text-input");
@@ -91,9 +113,60 @@ let currentStroke = [];   // [{x, y}, ...] in CSS pixels relative to annot canva
 let undoStacks = {};      // {pageNum: [snapshot, ...]}
 const UNDO_DEPTH = 20;
 
+// Setlist state
+let currentView = "library";
+let returnView = "library";
+let setlistPlayback = null;    // null or {name, songs, index}
+let editingSetlistName = null;
+let editingSetlistSongs = [];
+let pickerSelectedScore = null;
+let setlistNameMode = "create"; // "create" or "rename"
+
 // Page layout info (set during render)
 // Each entry: {page, cssW, cssH} — the CSS dimensions of each rendered page
 let pageLayouts = [];
+
+// ---------------------------------------------------------------------------
+// View management
+// ---------------------------------------------------------------------------
+
+function showView(view) {
+  currentView = view;
+  libraryView.classList.add("hidden");
+  setlistView.classList.add("hidden");
+  setlistDetailView.classList.add("hidden");
+  viewerView.classList.add("hidden");
+  btnLibrary.classList.add("hidden");
+  btnSetlists.classList.add("hidden");
+  btnBack.classList.add("hidden");
+  btnLibrary.classList.remove("active");
+  btnSetlists.classList.remove("active");
+
+  switch (view) {
+    case "library":
+      libraryView.classList.remove("hidden");
+      btnLibrary.classList.remove("hidden");
+      btnSetlists.classList.remove("hidden");
+      btnLibrary.classList.add("active");
+      titleDisplay.textContent = "";
+      break;
+    case "setlists":
+      setlistView.classList.remove("hidden");
+      btnLibrary.classList.remove("hidden");
+      btnSetlists.classList.remove("hidden");
+      btnSetlists.classList.add("active");
+      titleDisplay.textContent = "";
+      break;
+    case "setlist-detail":
+      setlistDetailView.classList.remove("hidden");
+      btnBack.classList.remove("hidden");
+      break;
+    case "viewer":
+      viewerView.classList.remove("hidden");
+      btnBack.classList.remove("hidden");
+      break;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // API helpers
@@ -227,12 +300,10 @@ function updateSortHeaders() {
 
 async function openScore(score) {
   currentScore = score;
+  setlistPlayback = null;
+  returnView = currentView;
   titleDisplay.textContent = `${score.composer} — ${score.title}`;
-
-  libraryView.classList.add("hidden");
-  viewerView.classList.remove("hidden");
-  btnLibrary.classList.add("hidden");
-  btnBack.classList.remove("hidden");
+  showView("viewer");
 
   // Load annotations
   try {
@@ -268,6 +339,7 @@ function closeScore() {
   rotations = {};
   undoStacks = {};
   pageLayouts = [];
+  setlistPlayback = null;
   setTool("nav");
   canvas1.width = 0;
   canvas1.height = 0;
@@ -278,12 +350,8 @@ function closeScore() {
   annotCanvas2.width = 0;
   annotCanvas2.height = 0;
   pageWrap2.classList.add("hidden");
-
-  viewerView.classList.add("hidden");
-  libraryView.classList.remove("hidden");
-  btnBack.classList.add("hidden");
-  btnLibrary.classList.remove("hidden");
   titleDisplay.textContent = "";
+  showView(returnView);
 }
 
 async function renderPage() {
@@ -355,8 +423,17 @@ async function renderSinglePage(pageNum, pdfCanvas, annotCanvas) {
   return { cssW, cssH };
 }
 
+function getPageRange() {
+  if (!setlistPlayback) return { min: 1, max: totalPages };
+  const song = setlistPlayback.songs[setlistPlayback.index];
+  const min = Math.max(1, Math.min(song.start_page || 1, totalPages));
+  const max = song.end_page ? Math.min(song.end_page, totalPages) : totalPages;
+  return { min, max };
+}
+
 function goToPage(n) {
-  const p = Math.max(1, Math.min(totalPages, n));
+  const range = getPageRange();
+  const p = Math.max(range.min, Math.min(range.max, n));
   if (p !== currentPage) {
     currentPage = p;
     renderPage();
@@ -365,11 +442,25 @@ function goToPage(n) {
 
 function nextPage() {
   const step = sideBySide ? 2 : 1;
+  const range = getPageRange();
+  if (currentPage + step > range.max) {
+    if (setlistPlayback && setlistPlayback.index < setlistPlayback.songs.length - 1) {
+      openSetlistSong(setlistPlayback.index + 1);
+    }
+    return;
+  }
   goToPage(currentPage + step);
 }
 
 function prevPage() {
   const step = sideBySide ? 2 : 1;
+  const range = getPageRange();
+  if (currentPage - step < range.min) {
+    if (setlistPlayback && setlistPlayback.index > 0) {
+      openSetlistSong(setlistPlayback.index - 1, true);
+    }
+    return;
+  }
   goToPage(currentPage - step);
 }
 
@@ -799,7 +890,14 @@ textDialog.addEventListener("close", () => {
 // Navigation events
 // ---------------------------------------------------------------------------
 
-btnBack.addEventListener("click", closeScore);
+btnBack.addEventListener("click", () => {
+  if (currentView === "viewer") {
+    closeScore();
+  } else if (currentView === "setlist-detail") {
+    showView("setlists");
+    loadSetlists();
+  }
+});
 
 btnPrev.addEventListener("click", prevPage);
 btnNext.addEventListener("click", nextPage);
@@ -835,7 +933,7 @@ document.addEventListener("keydown", (e) => {
   }
 
   // Dialog open — don't handle
-  if (textDialog.open || dirDialog.open) return;
+  if (textDialog.open || dirDialog.open || setlistNameDialog.open || songPickerDialog.open) return;
 
   if (!pdfDoc) return;
 
@@ -907,6 +1005,306 @@ searchInput.addEventListener("input", () => {
 });
 
 composerFilter.addEventListener("change", loadLibrary);
+
+// ---------------------------------------------------------------------------
+// Setlist list view
+// ---------------------------------------------------------------------------
+
+btnLibrary.addEventListener("click", () => { showView("library"); loadLibrary(); });
+btnSetlists.addEventListener("click", () => { showView("setlists"); loadSetlists(); });
+
+async function loadSetlists() {
+  try {
+    const data = await api("/api/setlists");
+    renderSetlistList(data.setlists);
+    setlistStatus.textContent = `${data.setlists.length} setlists`;
+  } catch (err) {
+    setlistStatus.textContent = `Error: ${err.message}`;
+  }
+}
+
+function renderSetlistList(setlists) {
+  setlistBody.innerHTML = "";
+  for (const sl of setlists) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(sl.name)}</td>
+      <td>${sl.count}</td>
+      <td class="setlist-actions">
+        <button class="small-btn edit-btn" title="Edit">Edit</button>
+        <button class="small-btn play-btn" title="Play">&#9654;</button>
+        <button class="small-btn del-btn" title="Delete">&#10005;</button>
+      </td>
+    `;
+    tr.querySelector(".edit-btn").addEventListener("click", () => openSetlistDetail(sl.name));
+    tr.querySelector(".play-btn").addEventListener("click", async () => {
+      const detail = await api(`/api/setlists/${encodeURIComponent(sl.name)}`);
+      if (detail.songs.length === 0) return;
+      startSetlistPlayback(sl.name, detail.songs);
+    });
+    tr.querySelector(".del-btn").addEventListener("click", async () => {
+      if (!confirm(`Delete setlist "${sl.name}"?`)) return;
+      await api(`/api/setlists/${encodeURIComponent(sl.name)}`, { method: "DELETE" });
+      loadSetlists();
+    });
+    setlistBody.appendChild(tr);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Setlist name dialog (create / rename)
+// ---------------------------------------------------------------------------
+
+btnNewSetlist.addEventListener("click", () => {
+  setlistNameMode = "create";
+  setlistNameDialogTitle.textContent = "New Setlist";
+  setlistNameInput.value = "";
+  setlistNameDialog.showModal();
+  setlistNameInput.focus();
+});
+
+btnRenameSetlist.addEventListener("click", () => {
+  setlistNameMode = "rename";
+  setlistNameDialogTitle.textContent = "Rename Setlist";
+  setlistNameInput.value = editingSetlistName || "";
+  setlistNameDialog.showModal();
+  setlistNameInput.focus();
+});
+
+setlistNameCancel.addEventListener("click", () => setlistNameDialog.close());
+
+setlistNameDialog.addEventListener("close", async () => {
+  if (setlistNameDialog.returnValue !== "ok") return;
+  const name = setlistNameInput.value.trim();
+  if (!name) return;
+
+  try {
+    if (setlistNameMode === "create") {
+      await api("/api/setlists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      loadSetlists();
+    } else if (setlistNameMode === "rename" && editingSetlistName) {
+      await api(`/api/setlists/${encodeURIComponent(editingSetlistName)}/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_name: name }),
+      });
+      editingSetlistName = name;
+      titleDisplay.textContent = name;
+      setlistDetailName.textContent = name;
+    }
+  } catch (err) {
+    console.error("Setlist name operation failed:", err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Setlist detail view
+// ---------------------------------------------------------------------------
+
+async function openSetlistDetail(name) {
+  try {
+    const data = await api(`/api/setlists/${encodeURIComponent(name)}`);
+    editingSetlistName = data.name;
+    editingSetlistSongs = data.songs;
+    showView("setlist-detail");
+    titleDisplay.textContent = editingSetlistName;
+    renderSetlistDetail();
+  } catch (err) {
+    console.error("Failed to load setlist:", err);
+  }
+}
+
+function renderSetlistDetail() {
+  setlistDetailName.textContent = editingSetlistName;
+  setlistSongsBody.innerHTML = "";
+
+  editingSetlistSongs.forEach((song, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${i + 1}</td>
+      <td>${esc(song.composer || "")}</td>
+      <td>${esc(song.title || "")}</td>
+      <td><input type="number" class="page-input start-pg" min="1" value="${song.start_page || 1}"></td>
+      <td><input type="number" class="page-input end-pg" min="0" value="${song.end_page || 0}"></td>
+      <td class="song-actions">
+        <button class="small-btn up-btn" title="Move up" ${i === 0 ? "disabled" : ""}>&#8593;</button>
+        <button class="small-btn down-btn" title="Move down" ${i === editingSetlistSongs.length - 1 ? "disabled" : ""}>&#8595;</button>
+        <button class="small-btn del-btn" title="Remove">&#10005;</button>
+      </td>
+    `;
+
+    tr.querySelector(".start-pg").addEventListener("change", (e) => {
+      song.start_page = parseInt(e.target.value, 10) || 1;
+      saveSetlistSongs();
+    });
+    tr.querySelector(".end-pg").addEventListener("change", (e) => {
+      const val = parseInt(e.target.value, 10) || 0;
+      song.end_page = val === 0 ? null : val;
+      saveSetlistSongs();
+    });
+    tr.querySelector(".up-btn").addEventListener("click", () => moveSong(i, -1));
+    tr.querySelector(".down-btn").addEventListener("click", () => moveSong(i, 1));
+    tr.querySelector(".del-btn").addEventListener("click", () => removeSong(i));
+
+    setlistSongsBody.appendChild(tr);
+  });
+}
+
+function moveSong(index, direction) {
+  const newIndex = index + direction;
+  if (newIndex < 0 || newIndex >= editingSetlistSongs.length) return;
+  [editingSetlistSongs[index], editingSetlistSongs[newIndex]] =
+    [editingSetlistSongs[newIndex], editingSetlistSongs[index]];
+  saveSetlistSongs();
+  renderSetlistDetail();
+}
+
+function removeSong(index) {
+  editingSetlistSongs.splice(index, 1);
+  saveSetlistSongs();
+  renderSetlistDetail();
+}
+
+async function saveSetlistSongs() {
+  if (!editingSetlistName) return;
+  try {
+    await api(`/api/setlists/${encodeURIComponent(editingSetlistName)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ songs: editingSetlistSongs }),
+    });
+  } catch (err) {
+    console.error("Failed to save setlist:", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Song picker dialog
+// ---------------------------------------------------------------------------
+
+btnAddSong.addEventListener("click", async () => {
+  pickerSelectedScore = null;
+  songSearch.value = "";
+  songStart.value = 1;
+  songEnd.value = 0;
+  songPickerAdd.disabled = true;
+  await renderSongPicker("");
+  songPickerDialog.showModal();
+  songSearch.focus();
+});
+
+async function renderSongPicker(query) {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  try {
+    const data = await api(`/api/library?${params}`);
+    songPickerList.innerHTML = "";
+    for (const s of data.scores) {
+      const div = document.createElement("div");
+      div.className = "picker-item";
+      div.textContent = `${s.composer} — ${s.title}`;
+      div.addEventListener("click", () => {
+        songPickerList.querySelectorAll(".picker-item").forEach(
+          (el) => el.classList.remove("selected")
+        );
+        div.classList.add("selected");
+        pickerSelectedScore = s;
+        songPickerAdd.disabled = false;
+      });
+      songPickerList.appendChild(div);
+    }
+  } catch (err) {
+    songPickerList.innerHTML = `<p style="color:#f88">Error loading library</p>`;
+  }
+}
+
+let songSearchTimer = null;
+songSearch.addEventListener("input", () => {
+  if (songSearchTimer) clearTimeout(songSearchTimer);
+  songSearchTimer = setTimeout(() => renderSongPicker(songSearch.value.trim()), 200);
+});
+
+songPickerCancel.addEventListener("click", () => {
+  pickerSelectedScore = null;
+  songPickerDialog.close();
+});
+
+songPickerDialog.addEventListener("close", () => {
+  if (songPickerDialog.returnValue !== "add" || !pickerSelectedScore) {
+    pickerSelectedScore = null;
+    return;
+  }
+  const startPage = parseInt(songStart.value, 10) || 1;
+  const endVal = parseInt(songEnd.value, 10) || 0;
+
+  editingSetlistSongs.push({
+    path: pickerSelectedScore.filepath,
+    title: pickerSelectedScore.title,
+    composer: pickerSelectedScore.composer,
+    start_page: startPage,
+    end_page: endVal === 0 ? null : endVal,
+  });
+
+  pickerSelectedScore = null;
+  saveSetlistSongs();
+  renderSetlistDetail();
+});
+
+// ---------------------------------------------------------------------------
+// Setlist playback
+// ---------------------------------------------------------------------------
+
+btnPlaySetlist.addEventListener("click", () => {
+  if (editingSetlistSongs.length === 0) return;
+  startSetlistPlayback(editingSetlistName, editingSetlistSongs);
+});
+
+function startSetlistPlayback(name, songs) {
+  if (songs.length === 0) return;
+  returnView = currentView;
+  setlistPlayback = { name, songs, index: 0 };
+  showView("viewer");
+  openSetlistSong(0);
+}
+
+async function openSetlistSong(index, goToEnd = false) {
+  setlistPlayback.index = index;
+  const song = setlistPlayback.songs[index];
+  const total = setlistPlayback.songs.length;
+
+  currentScore = { filepath: song.path, composer: song.composer, title: song.title };
+  titleDisplay.textContent = `${song.composer} — ${song.title} (${index + 1}/${total})`;
+
+  // Load annotations
+  try {
+    const data = await api(`/api/annotations?path=${encodeURIComponent(song.path)}`);
+    annotations = data.pages || {};
+    rotations = data.rotations || {};
+  } catch {
+    annotations = {};
+    rotations = {};
+  }
+  undoStacks = {};
+
+  try {
+    const loadingTask = pdfjsLib.getDocument(`/api/pdf?path=${encodeURIComponent(song.path)}`);
+    pdfDoc = await loadingTask.promise;
+    totalPages = pdfDoc.numPages;
+
+    const range = getPageRange();
+    pageTotal.textContent = totalPages;
+    pageInput.max = totalPages;
+    currentPage = goToEnd ? range.max : range.min;
+    pageInput.value = currentPage;
+    renderPage();
+  } catch (err) {
+    pdfContainer.innerHTML = `<p style="color:#f88;padding:20px">Failed to load PDF: ${esc(err.message)}</p>`;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Set directory dialog

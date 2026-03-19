@@ -35,30 +35,18 @@
 - Rotation persisted in sidecar JSON; zero rotations cleaned on save
 - 2 new API tests: rotation round-trip and zero-rotation cleanup
 - 48 tests passing (27 core + 21 API)
-
-* Phase 4 — Setlist management
-** TODO Backend: setlist CRUD API
-- =GET /api/setlists= — return all setlists
-- =POST /api/setlists= — create a new setlist
-- =PUT /api/setlists/:name= — update setlist (reorder, add/remove songs)
-- =DELETE /api/setlists/:name= — delete setlist
-- =PUT /api/setlists/:name/rename= — rename setlist
-- Data stored in =setlists.json= at library root (see =docs/setlist-file-format.md=)
-** TODO Frontend: setlist UI
-- Setlist panel (sidebar or dropdown) listing all setlists
-- Create / rename / delete setlist
-- Add scores from library to a setlist (drag-and-drop or button)
-- Reorder songs within a setlist (drag-and-drop)
-- Set start/end page per song
-** TODO Setlist playback mode
-- Open a setlist → sequential PDF viewing with page constraints
-- Next/prev navigates within the setlist, advancing to next song at boundaries
-- Visual indicator showing current position within setlist
-- "Now Playing" display with song title and setlist progress
-** TODO Tests for setlist endpoints and logic
-- CRUD operations, validation, edge cases
-- Setlist file persistence and reload
-- Page constraint clamping
+** DONE Phase 4 — Setlist management
+- Backend: full CRUD API (GET/POST/PUT/DELETE + rename) for setlists
+- Data stored in =setlists.json= at library root per existing file format spec
+- Frontend: setlist list view with create/edit/play/delete
+- Setlist detail view: song table with inline start/end page editing, reorder (↑↓), remove
+- Song picker dialog: search library, select score, set page range
+- Setlist playback mode: sequential PDF viewing with page constraints
+- Next/prev at song boundaries auto-advances to adjacent song
+- Title bar shows song position within setlist (e.g. "Composer — Title (2/5)")
+- View management refactored: Library ↔ Setlists toggle, context-aware Back button
+- 13 new setlist API tests (CRUD, validation, rename, edge cases)
+- 61 tests passing (27 core + 34 API)
 
 * Phase 5 — PWA and iPad polish
 ** TODO Web app manifest (=manifest.json=)

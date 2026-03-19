@@ -15,7 +15,8 @@
   <header id="topbar">
     <div class="topbar-left">
       <button id="btn-library" class="nav-btn active" title="Library">Library</button>
-      <button id="btn-back" class="nav-btn hidden" title="Back to library">&larr; Back</button>
+      <button id="btn-setlists" class="nav-btn" title="Setlists">Setlists</button>
+      <button id="btn-back" class="nav-btn hidden" title="Back">&larr; Back</button>
     </div>
     <div class="topbar-center">
       <span id="title-display"></span>
@@ -49,6 +50,57 @@
       </table>
     </div>
     <div id="library-status"></div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- Setlist list view                                                  -->
+  <!-- ================================================================== -->
+  <section id="setlist-view" class="hidden">
+    <div id="setlist-toolbar">
+      <button id="btn-new-setlist">New Setlist</button>
+    </div>
+    <div id="setlist-list-wrap">
+      <table id="setlist-table">
+        <thead>
+          <tr>
+            <th>Setlist</th>
+            <th>Songs</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="setlist-body"></tbody>
+      </table>
+    </div>
+    <div id="setlist-status"></div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- Setlist detail view                                                -->
+  <!-- ================================================================== -->
+  <section id="setlist-detail" class="hidden">
+    <div id="setlist-detail-toolbar">
+      <span id="setlist-detail-name"></span>
+      <button id="btn-rename-setlist" title="Rename setlist">Rename</button>
+      <span class="toolbar-sep"></span>
+      <button id="btn-add-song">Add Song</button>
+      <span class="toolbar-sep"></span>
+      <button id="btn-play-setlist" title="Play this setlist">&#9654; Play</button>
+    </div>
+    <div id="setlist-songs-wrap">
+      <table id="setlist-songs-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Composer</th>
+            <th>Title</th>
+            <th>Start</th>
+            <th>End</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="setlist-songs-body"></tbody>
+      </table>
+    </div>
   </section>
 
   <!-- ================================================================== -->
@@ -150,6 +202,40 @@
       <div class="dialog-buttons">
         <button type="button" id="text-cancel">Cancel</button>
         <button type="submit" id="text-ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ================================================================== -->
+  <!-- Setlist name dialog (create / rename)                             -->
+  <!-- ================================================================== -->
+  <dialog id="setlist-name-dialog">
+    <form method="dialog">
+      <h3 id="setlist-name-dialog-title">New Setlist</h3>
+      <input type="text" id="setlist-name-input" placeholder="Setlist name" style="width:100%">
+      <div class="dialog-buttons">
+        <button type="button" id="setlist-name-cancel">Cancel</button>
+        <button type="submit" value="ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ================================================================== -->
+  <!-- Song picker dialog                                                -->
+  <!-- ================================================================== -->
+  <dialog id="song-picker-dialog">
+    <form method="dialog">
+      <h3>Add Song</h3>
+      <input type="text" id="song-search" placeholder="Search scores…" style="width:100%;margin-bottom:8px">
+      <div id="song-picker-list"></div>
+      <div class="dialog-row" style="display:flex;gap:12px;margin-top:8px">
+        <label>Start page <input type="number" id="song-start" min="1" value="1" style="width:60px"></label>
+        <label>End page <input type="number" id="song-end" min="0" value="0" style="width:60px"></label>
+        <span style="color:var(--fg-dim);font-size:12px;align-self:center">0 = last</span>
+      </div>
+      <div class="dialog-buttons">
+        <button type="button" id="song-picker-cancel">Cancel</button>
+        <button type="submit" id="song-picker-add" value="add" disabled>Add</button>
       </div>
     </form>
   </dialog>
