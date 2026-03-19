@@ -9,6 +9,11 @@ __pycache__/
 *.json
 !web/static/*.json
 
+# Legacy build artifacts (PyInstaller)
+build/
+dist/
+*.spec
+
 # OS / editor
 .DS_Store
 *~
