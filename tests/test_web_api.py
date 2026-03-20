@@ -520,6 +520,22 @@ class TestSecurity:
         assert data["auth_required"] is False
         assert data["authenticated"] is True
 
+    def test_changing_salt_invalidates_session(self, client, tmp_path):
+        """Changing auth_salt should invalidate existing session cookies."""
+        import datetime
+        srv._save_config({"auth_salt": "original"})
+        today = datetime.date.today().isoformat()
+        resp = client.post("/api/login",
+                           json={"passphrase": f"{today}-original"})
+        assert resp.status_code == 200
+        # Session works with original salt
+        resp = client.get("/api/config")
+        assert resp.status_code == 200
+        # Change the salt — old cookie should be invalid
+        srv._save_config({"auth_salt": "changed"})
+        resp = client.get("/api/config")
+        assert resp.status_code == 401
+
     def test_exception_details_not_leaked(self, client, library_with_pdfs):
         state.set_library(library_with_pdfs)
         # Use a path inside the library that doesn't exist

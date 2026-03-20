@@ -121,10 +121,16 @@ def _expected_passphrase(salt: str) -> str:
 
 
 def _make_session_token() -> str:
-    """Create an HMAC-signed session token embedding a timestamp."""
+    """Create an HMAC-signed session token embedding a timestamp.
+
+    The current auth salt is mixed into the HMAC so that changing the
+    salt automatically invalidates all existing sessions.
+    """
+    salt = _get_auth_salt()
     ts = str(int(datetime.datetime.now(datetime.timezone.utc).timestamp()))
+    msg = f"{ts}.{salt}".encode()
     sig = hmac.new(
-        _get_session_secret().encode(), ts.encode(), hashlib.sha256
+        _get_session_secret().encode(), msg, hashlib.sha256
     ).hexdigest()
     return f"{ts}.{sig}"
 
@@ -135,8 +141,10 @@ def _verify_session_token(token: str) -> bool:
     if len(parts) != 2:
         return False
     ts_str, sig = parts
+    salt = _get_auth_salt()
+    msg = f"{ts_str}.{salt}".encode()
     expected = hmac.new(
-        _get_session_secret().encode(), ts_str.encode(), hashlib.sha256
+        _get_session_secret().encode(), msg, hashlib.sha256
     ).hexdigest()
     if not hmac.compare_digest(sig, expected):
         return False
