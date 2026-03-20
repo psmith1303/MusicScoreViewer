@@ -491,14 +491,14 @@ class TestSecurity:
 
     def test_auth_blocks_without_cookie(self, client, tmp_path):
         """When auth_salt is set, API calls without a session cookie get 401."""
-        state.config["auth_salt"] = "testuser"
+        srv._save_config({"auth_salt": "testuser"})
         resp = client.get("/api/config")
         assert resp.status_code == 401
 
-    def test_auth_login_sets_cookie(self, client, tmp_path, monkeypatch):
+    def test_auth_login_sets_cookie(self, client, tmp_path):
         """Correct passphrase sets a session cookie that authenticates."""
         import datetime
-        state.config["auth_salt"] = "testuser"
+        srv._save_config({"auth_salt": "testuser"})
         today = datetime.date.today().isoformat()
         resp = client.post("/api/login",
                            json={"passphrase": f"{today}-testuser"})
@@ -508,7 +508,7 @@ class TestSecurity:
         assert resp.status_code == 200
 
     def test_auth_bad_passphrase(self, client, tmp_path):
-        state.config["auth_salt"] = "testuser"
+        srv._save_config({"auth_salt": "testuser"})
         resp = client.post("/api/login",
                            json={"passphrase": "wrong"})
         assert resp.status_code == 403

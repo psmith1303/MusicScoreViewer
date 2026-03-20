@@ -90,9 +90,19 @@ _SESSION_MAX_AGE = 30 * 24 * 3600  # 30 days
 
 
 def _get_auth_salt() -> str:
-    """Return the auth salt.  Env var FOLIO_AUTH_SALT takes precedence."""
-    return os.environ.get("FOLIO_AUTH_SALT", "").strip() or \
-        state.config.get("auth_salt", "").strip()
+    """Return the auth salt.  Env var takes precedence, then config file.
+
+    Reads the config file directly (not the in-memory cache) so that
+    changes to auth_salt take effect without restarting the server.
+    """
+    env_salt = os.environ.get("FOLIO_AUTH_SALT", "").strip()
+    if env_salt:
+        return env_salt
+    try:
+        cfg = SafeJSON.load(WEB_CONFIG_PATH, default={})
+        return cfg.get("auth_salt", "").strip()
+    except SafeJSONError:
+        return ""
 
 
 def _get_session_secret() -> str:
