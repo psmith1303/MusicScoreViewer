@@ -265,8 +265,14 @@
     <form method="dialog">
       <h3>Add to Setlist</h3>
       <div id="setlist-picker-list"></div>
+      <div class="dialog-row" style="display:flex;gap:12px;margin-top:8px">
+        <label>Start page <input type="number" id="setlist-picker-start" min="1" value="1" style="width:60px"></label>
+        <label>End page <input type="number" id="setlist-picker-end" min="0" value="0" style="width:60px"></label>
+        <span style="color:var(--fg-dim);font-size:12px;align-self:center">0 = last</span>
+      </div>
       <div class="dialog-buttons">
         <button type="button" id="setlist-picker-cancel">Cancel</button>
+        <button type="submit" id="setlist-picker-add" value="add" disabled>Add</button>
       </div>
     </form>
   </dialog>

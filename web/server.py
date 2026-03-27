@@ -201,6 +201,11 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app = FastAPI(title="Folio", version="2.1.0", docs_url=None, redoc_url=None)
 
 
+@app.on_event("startup")
+def _log_startup():
+    logging.info("Folio v%s starting", app.version)
+
+
 # ---------------------------------------------------------------------------
 # Security: rate limiting (simple in-memory per-IP, per-endpoint bucket)
 # ---------------------------------------------------------------------------
@@ -446,6 +451,7 @@ def serve_pdf(path: str = Query(..., description="Score filepath")):
         resolved,
         media_type="application/pdf",
         filename=os.path.basename(resolved),
+        headers={"Cache-Control": "no-cache"},
     )
 
 

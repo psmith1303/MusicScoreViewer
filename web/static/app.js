@@ -168,6 +168,9 @@ const btnAddToSetlist = $("#btn-add-to-setlist");
 const setlistPickerDialog = $("#setlist-picker-dialog");
 const setlistPickerList = $("#setlist-picker-list");
 const setlistPickerCancel = $("#setlist-picker-cancel");
+const setlistPickerStart = $("#setlist-picker-start");
+const setlistPickerEnd = $("#setlist-picker-end");
+const setlistPickerAdd = $("#setlist-picker-add");
 const btnAddSetlistRef = $("#btn-add-setlist-ref");
 const setlistRefPickerDialog = $("#setlist-ref-picker-dialog");
 const setlistRefPickerList = $("#setlist-ref-picker-list");
@@ -415,7 +418,7 @@ async function openScore(score) {
   userLockedMode = false;
 
   try {
-    const loadingTask = pdfjsLib.getDocument(`/api/pdf?path=${encodeURIComponent(score.filepath)}`);
+    const loadingTask = pdfjsLib.getDocument(`/api/pdf?path=${encodeURIComponent(score.filepath)}&_t=${Date.now()}`);
     pdfDoc = await loadingTask.promise;
     totalPages = pdfDoc.numPages;
     pageTotal.textContent = totalPages;
@@ -1225,21 +1228,22 @@ searchInput.addEventListener("input", () => {
 
 composerFilter.addEventListener("change", loadLibrary);
 
-let lastResetTime = 0;
-btnReset.addEventListener("click", () => {
-  const now = Date.now();
-  if (now - lastResetTime < 500) {
-    // Double-press: reload the app
-    location.reload();
-    return;
-  }
-  lastResetTime = now;
+btnReset.addEventListener("click", async () => {
   searchInput.value = "";
   composerFilter.value = "";
   selectedTags.clear();
   sortCol = "composer";
   sortDesc = false;
   updateSortHeaders();
+  try {
+    await api("/api/library/rescan", { method: "POST" });
+  } catch (err) {
+    console.error("Rescan failed:", err);
+  }
+  if ("caches" in window) {
+    const names = await caches.keys();
+    await Promise.all(names.map((n) => caches.delete(n)));
+  }
   loadLibrary();
 });
 
@@ -1255,6 +1259,9 @@ async function loadSetlists() {
     const data = await api("/api/setlists");
     renderSetlistList(data.setlists);
     setlistStatus.textContent = `${data.setlists.length} setlists`;
+    if (editingSetlistName) {
+      openSetlistDetail(editingSetlistName);
+    }
   } catch (err) {
     setlistStatus.textContent = `Error: ${err.message}`;
   }
@@ -1617,7 +1624,7 @@ async function openSetlistSong(index, goToEnd = false) {
   userLockedMode = false;
 
   try {
-    const loadingTask = pdfjsLib.getDocument(`/api/pdf?path=${encodeURIComponent(song.path)}`);
+    const loadingTask = pdfjsLib.getDocument(`/api/pdf?path=${encodeURIComponent(song.path)}&_t=${Date.now()}`);
     pdfDoc = await loadingTask.promise;
     totalPages = pdfDoc.numPages;
 
@@ -1809,8 +1816,14 @@ btnExport.addEventListener("click", async () => {
 
 btnAddToSetlist.addEventListener("click", showSetlistPicker);
 
+let _pickerSelectedSetlist = null;
+
 async function showSetlistPicker() {
   if (!currentScore) return;
+  _pickerSelectedSetlist = null;
+  setlistPickerAdd.disabled = true;
+  setlistPickerStart.value = currentPage;
+  setlistPickerEnd.value = 0;
   try {
     const data = await api("/api/setlists");
     setlistPickerList.innerHTML = "";
@@ -1822,7 +1835,14 @@ async function showSetlistPicker() {
         const div = document.createElement("div");
         div.className = "picker-item";
         div.textContent = `${sl.name} (${sl.count})`;
-        div.addEventListener("click", () => addCurrentScoreToSetlist(sl.name));
+        div.addEventListener("click", () => {
+          setlistPickerList.querySelectorAll(".picker-item").forEach(
+            (el) => el.classList.remove("selected")
+          );
+          div.classList.add("selected");
+          _pickerSelectedSetlist = sl.name;
+          setlistPickerAdd.disabled = false;
+        });
         setlistPickerList.appendChild(div);
       }
     }
@@ -1832,8 +1852,15 @@ async function showSetlistPicker() {
   }
 }
 
-async function addCurrentScoreToSetlist(setlistName) {
-  setlistPickerDialog.close();
+setlistPickerDialog.addEventListener("close", async () => {
+  if (setlistPickerDialog.returnValue !== "add" || !_pickerSelectedSetlist) return;
+  const startPage = parseInt(setlistPickerStart.value, 10) || 1;
+  const endRaw = parseInt(setlistPickerEnd.value, 10) || 0;
+  const endPage = endRaw === 0 ? null : endRaw;
+  await addCurrentScoreToSetlist(_pickerSelectedSetlist, startPage, endPage);
+});
+
+async function addCurrentScoreToSetlist(setlistName, startPage, endPage) {
   try {
     const data = await api(`/api/setlists/${encodeURIComponent(setlistName)}`);
     const items = data.items || [];
@@ -1842,8 +1869,8 @@ async function addCurrentScoreToSetlist(setlistName) {
       path: currentScore.filepath,
       title: currentScore.title || "",
       composer: currentScore.composer || "",
-      start_page: 1,
-      end_page: null,
+      start_page: startPage,
+      end_page: endPage,
     });
     await api(`/api/setlists/${encodeURIComponent(setlistName)}`, {
       method: "PUT",
