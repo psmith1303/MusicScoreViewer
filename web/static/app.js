@@ -175,6 +175,12 @@ const btnAddSetlistRef = $("#btn-add-setlist-ref");
 const setlistRefPickerDialog = $("#setlist-ref-picker-dialog");
 const setlistRefPickerList = $("#setlist-ref-picker-list");
 const setlistRefPickerCancel = $("#setlist-ref-picker-cancel");
+const btnEditTags = $("#btn-edit-tags");
+const tagEditorDialog = $("#tag-editor-dialog");
+const tagEditorChips = $("#tag-editor-chips");
+const tagEditorInput = $("#tag-editor-input");
+const tagEditorAddBtn = $("#tag-editor-add");
+const tagEditorCancel = $("#tag-editor-cancel");
 
 // ---------------------------------------------------------------------------
 // State
@@ -854,16 +860,17 @@ function onPointerDown(e, annotCanvas, layoutIndex) {
   if (activeTool === "nav") {
     // Wide mode: user scrolls instead of clicking to navigate
     if (displayMode === "wide") return;
-    // Click on right/bottom half → next page, left/top half → previous page
-    const { x, y } = canvasCoords(e, annotCanvas);
-    const layout = pageLayouts[layoutIndex];
-    if (layout) {
-      const rightHalf = x > layout.cssW / 2;
-      const bottomHalf = y > layout.cssH / 2;
-      if (rightHalf || bottomHalf) {
-        nextPage();
-      } else {
-        prevPage();
+    if (displayMode === "2up" && pageLayouts.length === 2) {
+      // 2-up: left page → previous, right page → next
+      if (layoutIndex === 0) prevPage();
+      else nextPage();
+    } else {
+      // Single page: right half → next, left half → previous
+      const { x } = canvasCoords(e, annotCanvas);
+      const layout = pageLayouts[layoutIndex];
+      if (layout) {
+        if (x > layout.cssW / 2) nextPage();
+        else prevPage();
       }
     }
     return;
@@ -1156,6 +1163,7 @@ document.addEventListener("keydown", (e) => {
     case "e": setTool("eraser"); return;
     case "f": toggleFullscreen(); return;
     case "s": showSetlistPicker(); return;
+    case "g": showTagEditor(); return;
     case "r": rotatePage(90); return;
     case "R": rotatePage(-90); return;
   }
@@ -1889,6 +1897,88 @@ async function addCurrentScoreToSetlist(setlistName, startPage, endPage) {
 }
 
 setlistPickerCancel.addEventListener("click", () => setlistPickerDialog.close());
+
+// ---------------------------------------------------------------------------
+// Tag editor (from viewer)
+// ---------------------------------------------------------------------------
+
+let _editingFilenameTags = [];
+let _editingFolderTags = [];
+
+btnEditTags.addEventListener("click", showTagEditor);
+
+function showTagEditor() {
+  if (!currentScore) return;
+  _editingFolderTags = currentScore.folder_tags || [];
+  _editingFilenameTags = [...(currentScore.filename_tags || [])];
+  tagEditorInput.value = "";
+  renderTagEditorChips();
+  tagEditorDialog.showModal();
+}
+
+function renderTagEditorChips() {
+  tagEditorChips.innerHTML = "";
+  for (const t of _editingFolderTags) {
+    const span = document.createElement("span");
+    span.className = "tag-chip-edit folder";
+    span.textContent = t;
+    span.title = "Folder tag (not editable)";
+    tagEditorChips.appendChild(span);
+  }
+  for (const t of _editingFilenameTags) {
+    const span = document.createElement("span");
+    span.className = "tag-chip-edit";
+    span.innerHTML = `${esc(t)}<span class="tag-remove" title="Remove">&times;</span>`;
+    span.querySelector(".tag-remove").addEventListener("click", () => {
+      _editingFilenameTags = _editingFilenameTags.filter((x) => x !== t);
+      renderTagEditorChips();
+    });
+    tagEditorChips.appendChild(span);
+  }
+}
+
+tagEditorAddBtn.addEventListener("click", () => {
+  const raw = tagEditorInput.value.trim().toLowerCase().replace(/[^\w-]/g, "");
+  if (!raw) return;
+  if (!_editingFilenameTags.includes(raw) && !_editingFolderTags.includes(raw)) {
+    _editingFilenameTags.push(raw);
+    renderTagEditorChips();
+  }
+  tagEditorInput.value = "";
+});
+
+tagEditorInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    tagEditorAddBtn.click();
+  }
+});
+
+tagEditorDialog.addEventListener("close", async () => {
+  if (tagEditorDialog.returnValue !== "save") return;
+  try {
+    const data = await api("/api/scores/tags", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        path: currentScore.filepath,
+        filename_tags: _editingFilenameTags,
+      }),
+    });
+    // Update currentScore with new data
+    currentScore.filepath = data.score.filepath;
+    currentScore.filename = data.score.filename;
+    currentScore.tags = data.score.tags;
+    currentScore.folder_tags = data.score.folder_tags;
+    currentScore.filename_tags = data.score.filename_tags;
+    titleDisplay.textContent = `${currentScore.composer} — ${currentScore.title}`;
+  } catch (err) {
+    console.error("Failed to update tags:", err);
+    alert("Failed to update tags: " + err.message);
+  }
+});
+
+tagEditorCancel.addEventListener("click", () => tagEditorDialog.close());
 
 // ---------------------------------------------------------------------------
 // Add setlist reference (sub-setlist picker)

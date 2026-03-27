@@ -27,11 +27,13 @@ from .core import (
     SafeJSON,
     SafeJSONError,
     Score,
+    build_tagged_filename,
     export_annotated_pdf,
     load_annotations,
     normalize_path,
     pdf_page_count,
     portable_path,
+    rename_score_tags,
     save_annotations,
     scan_library,
 )
@@ -394,6 +396,63 @@ def rescan_library():
         "library_dir": portable_path(state.library_dir),
         "score_count": len(state.scores),
     }
+
+
+class UpdateTagsRequest(BaseModel):
+    path: str
+    filename_tags: list[str]
+
+
+@app.put("/api/scores/tags")
+def update_score_tags(req: UpdateTagsRequest):
+    """Update the filename tags on a score, renaming the file on disk."""
+    if not state.library_dir:
+        raise HTTPException(status_code=400, detail="No library directory set")
+    resolved = _validate_library_path(req.path)
+
+    # Find the score in our in-memory library
+    score = None
+    score_idx = None
+    for i, s in enumerate(state.scores):
+        if os.path.normpath(s.filepath) == os.path.normpath(resolved):
+            score = s
+            score_idx = i
+            break
+    if score is None:
+        raise HTTPException(status_code=404, detail="Score not found in library")
+
+    # Clean tags: lowercase, alphanumeric + hyphens only
+    clean_tags = set()
+    for t in req.filename_tags:
+        t = re.sub(r'[^\w-]', '', t.strip().lower())
+        if t:
+            clean_tags.add(t)
+
+    try:
+        new_score = rename_score_tags(score, clean_tags)
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Rename failed: {e}")
+
+    # Update in-memory library
+    state.scores[score_idx] = new_score
+
+    # Update setlist references that point to the old path
+    old_portable = portable_path(score.filepath)
+    new_portable = portable_path(new_score.filepath)
+    if old_portable != new_portable:
+        data = _load_setlists()
+        changed = False
+        for sl_items in data.values():
+            for item in sl_items:
+                if item.get("type", "song") == "song" and item.get("path") == old_portable:
+                    item["path"] = new_portable
+                    changed = True
+        if changed:
+            _save_setlists(data)
+
+    return {"ok": True, "score": new_score.to_dict()}
 
 
 @app.get("/api/library")

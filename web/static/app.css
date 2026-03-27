@@ -465,6 +465,41 @@ th.sortable:hover {
   color: #fff;
 }
 
+/* Tag editor */
+#tag-editor-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+  min-height: 28px;
+}
+
+.tag-chip-edit {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.tag-chip-edit.folder {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.tag-chip-edit .tag-remove {
+  margin-left: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  color: var(--fg-dim);
+}
+
+.tag-chip-edit .tag-remove:hover {
+  color: red;
+}
+
 /* ================================================================== */
 /* Annotation toolbar                                                 */
 /* ================================================================== */

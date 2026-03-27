@@ -129,7 +129,12 @@ class Score:
     filename: str
     composer: str = "Unknown"
     title: str = ""
-    tags: set[str] = field(default_factory=set)
+    folder_tags: set[str] = field(default_factory=set)
+    filename_tags: set[str] = field(default_factory=set)
+
+    @property
+    def tags(self) -> set[str]:
+        return self.folder_tags | self.filename_tags
 
     def __init__(self, filepath: str, filename: str,
                  folder_tags: set[str] | None = None) -> None:
@@ -137,9 +142,10 @@ class Score:
         self.filename = filename
         self.composer = "Unknown"
         self.title = ""
-        self.tags = set()
+        self.folder_tags = set()
+        self.filename_tags = set()
         if folder_tags:
-            self.tags.update(t.lower() for t in folder_tags if t)
+            self.folder_tags.update(t.lower() for t in folder_tags if t)
         self._parse()
 
     def _parse(self) -> None:
@@ -148,7 +154,9 @@ class Score:
             if " -- " in base:
                 parts = base.split(" -- ", 1)
                 base = parts[0]
-                self.tags.update(t.lower() for t in parts[1].split() if t)
+                self.filename_tags.update(
+                    t.lower() for t in parts[1].split() if t
+                )
             if " - " in base:
                 parts = base.split(" - ", 1)
                 self.composer = parts[0].strip()
@@ -166,7 +174,64 @@ class Score:
             "composer": self.composer,
             "title": self.title,
             "tags": sorted(self.tags),
+            "folder_tags": sorted(self.folder_tags),
+            "filename_tags": sorted(self.filename_tags),
         }
+
+
+def build_tagged_filename(composer: str, title: str,
+                          filename_tags: set[str],
+                          ext: str = ".pdf") -> str:
+    """Reconstruct a filename from its parsed components.
+
+    Returns e.g. ``Bach - Suite -- jazz blues.pdf``.
+    Tags are sorted for deterministic output.
+    """
+    if composer and composer != "Unknown":
+        base = f"{composer} - {title}"
+    else:
+        base = title
+    if filename_tags:
+        tag_str = " ".join(sorted(filename_tags))
+        base = f"{base} -- {tag_str}"
+    return base + ext
+
+
+def rename_score_tags(score: Score, new_tags: set[str]) -> Score:
+    """Rename a score's file on disk to reflect *new_tags*.
+
+    Also renames the annotation sidecar JSON if it exists.
+    Returns a new Score with updated filepath/filename/tags.
+    Raises FileExistsError if the target filename already exists.
+    """
+    if new_tags == score.filename_tags:
+        return score
+
+    ext = os.path.splitext(score.filename)[1]
+    new_filename = build_tagged_filename(
+        score.composer, score.title, new_tags, ext
+    )
+    old_dir = os.path.dirname(score.filepath)
+    new_filepath = os.path.join(old_dir, new_filename)
+
+    if os.path.exists(new_filepath):
+        raise FileExistsError(f"Target file already exists: {new_filename}")
+
+    # Rename PDF
+    os.rename(score.filepath, new_filepath)
+
+    # Rename sidecar JSON if it exists
+    old_sidecar = annotation_sidecar_path(score.filepath)
+    if os.path.exists(old_sidecar):
+        new_sidecar = annotation_sidecar_path(new_filepath)
+        try:
+            os.rename(old_sidecar, new_sidecar)
+        except OSError:
+            # Roll back PDF rename
+            os.rename(new_filepath, score.filepath)
+            raise
+
+    return Score(new_filepath, new_filename, score.folder_tags)
 
 
 # ---------------------------------------------------------------------------

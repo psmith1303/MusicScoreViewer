@@ -14,9 +14,11 @@ from web.core import (
     Score,
     annotation_sidecar_path,
     annotations_etag,
+    build_tagged_filename,
     load_annotations,
     normalize_path,
     portable_path,
+    rename_score_tags,
     save_annotations,
     scan_library,
 )
@@ -320,3 +322,91 @@ class TestSaveAnnotations:
         save_annotations(str(pdf), {}, {})
         # Save without etag — no conflict check
         save_annotations(str(pdf), {"0": []}, {})
+
+
+# ---------------------------------------------------------------------------
+# build_tagged_filename
+# ---------------------------------------------------------------------------
+
+
+class TestBuildTaggedFilename:
+    def test_composer_title_tags(self):
+        result = build_tagged_filename("Bach", "Suite", {"jazz", "blues"})
+        assert result == "Bach - Suite -- blues jazz.pdf"
+
+    def test_composer_title_no_tags(self):
+        assert build_tagged_filename("Bach", "Suite", set()) == "Bach - Suite.pdf"
+
+    def test_unknown_composer(self):
+        assert build_tagged_filename("Unknown", "MyScore", {"jazz"}) == "MyScore -- jazz.pdf"
+
+    def test_empty_composer(self):
+        assert build_tagged_filename("", "MyScore", set()) == "MyScore.pdf"
+
+    def test_tags_sorted(self):
+        result = build_tagged_filename("Bach", "Suite", {"zebra", "alpha", "mid"})
+        assert " -- alpha mid zebra.pdf" in result
+
+    def test_custom_extension(self):
+        result = build_tagged_filename("Bach", "Suite", set(), ext=".PDF")
+        assert result == "Bach - Suite.PDF"
+
+
+# ---------------------------------------------------------------------------
+# rename_score_tags
+# ---------------------------------------------------------------------------
+
+
+class TestRenameScoreTags:
+    def test_add_tag(self, tmp_path):
+        pdf = tmp_path / "Bach - Suite.pdf"
+        pdf.touch()
+        score = Score(str(pdf), pdf.name)
+        new_score = rename_score_tags(score, {"jazz"})
+        assert new_score.filename == "Bach - Suite -- jazz.pdf"
+        assert os.path.exists(new_score.filepath)
+        assert not os.path.exists(str(pdf))
+
+    def test_remove_tag(self, tmp_path):
+        pdf = tmp_path / "Bach - Suite -- jazz.pdf"
+        pdf.touch()
+        score = Score(str(pdf), pdf.name)
+        new_score = rename_score_tags(score, set())
+        assert new_score.filename == "Bach - Suite.pdf"
+        assert os.path.exists(new_score.filepath)
+
+    def test_sidecar_renamed(self, tmp_path):
+        pdf = tmp_path / "Bach - Suite.pdf"
+        sidecar = tmp_path / "Bach - Suite.json"
+        pdf.touch()
+        sidecar.write_text("{}")
+        score = Score(str(pdf), pdf.name)
+        new_score = rename_score_tags(score, {"jazz"})
+        new_sidecar = os.path.splitext(new_score.filepath)[0] + ".json"
+        assert os.path.exists(new_sidecar)
+        assert not os.path.exists(str(sidecar))
+
+    def test_no_change_returns_same(self, tmp_path):
+        pdf = tmp_path / "Bach - Suite -- jazz.pdf"
+        pdf.touch()
+        score = Score(str(pdf), pdf.name)
+        result = rename_score_tags(score, {"jazz"})
+        assert result is score
+
+    def test_target_exists_raises(self, tmp_path):
+        pdf = tmp_path / "Bach - Suite.pdf"
+        target = tmp_path / "Bach - Suite -- jazz.pdf"
+        pdf.touch()
+        target.touch()
+        score = Score(str(pdf), pdf.name)
+        with pytest.raises(FileExistsError):
+            rename_score_tags(score, {"jazz"})
+
+    def test_folder_tags_preserved(self, tmp_path):
+        pdf = tmp_path / "Bach - Suite.pdf"
+        pdf.touch()
+        score = Score(str(pdf), pdf.name, folder_tags={"classical"})
+        new_score = rename_score_tags(score, {"jazz"})
+        assert "classical" in new_score.folder_tags
+        assert "jazz" in new_score.filename_tags
+        assert new_score.tags == {"classical", "jazz"}

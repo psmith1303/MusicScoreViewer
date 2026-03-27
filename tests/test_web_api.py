@@ -831,3 +831,98 @@ class TestExportPDF:
     def test_export_no_library_returns_400(self, client):
         resp = client.get("/api/pdf/export?path=/some/file.pdf")
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/scores/tags
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateTags:
+    def test_add_tag(self, client, library_with_pdfs):
+        client.post("/api/library", json={"path": library_with_pdfs})
+        resp = client.put("/api/scores/tags", json={
+            "path": os.path.join(library_with_pdfs, "Bach - Cello Suite.pdf"),
+            "filename_tags": ["jazz"],
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"]
+        assert "jazz" in data["score"]["filename_tags"]
+        assert data["score"]["filename"] == "Bach - Cello Suite -- jazz.pdf"
+        # Old file gone, new file exists
+        assert not os.path.exists(os.path.join(library_with_pdfs, "Bach - Cello Suite.pdf"))
+        assert os.path.exists(os.path.join(library_with_pdfs, "Bach - Cello Suite -- jazz.pdf"))
+
+    def test_remove_tag(self, client, library_with_pdfs):
+        client.post("/api/library", json={"path": library_with_pdfs})
+        tagged = os.path.join(library_with_pdfs, "jazz", "Davis - Blue -- swing.pdf")
+        resp = client.put("/api/scores/tags", json={
+            "path": tagged,
+            "filename_tags": [],
+        })
+        assert resp.status_code == 200
+        assert resp.json()["score"]["filename"] == "Davis - Blue.pdf"
+
+    def test_folder_tags_preserved(self, client, library_with_pdfs):
+        client.post("/api/library", json={"path": library_with_pdfs})
+        tagged = os.path.join(library_with_pdfs, "jazz", "Davis - Blue -- swing.pdf")
+        resp = client.put("/api/scores/tags", json={
+            "path": tagged,
+            "filename_tags": ["cool"],
+        })
+        assert resp.status_code == 200
+        score = resp.json()["score"]
+        assert "jazz" in score["folder_tags"]
+        assert "cool" in score["filename_tags"]
+
+    def test_no_library_returns_400(self, client):
+        resp = client.put("/api/scores/tags", json={
+            "path": "/some/file.pdf",
+            "filename_tags": ["jazz"],
+        })
+        assert resp.status_code == 400
+
+    def test_not_found_returns_404(self, client, library_with_pdfs):
+        client.post("/api/library", json={"path": library_with_pdfs})
+        resp = client.put("/api/scores/tags", json={
+            "path": os.path.join(library_with_pdfs, "Nonexistent.pdf"),
+            "filename_tags": ["jazz"],
+        })
+        assert resp.status_code in (403, 404)
+
+    def test_setlist_references_updated(self, client, library_with_pdfs):
+        client.post("/api/library", json={"path": library_with_pdfs})
+        pdf_path = os.path.join(library_with_pdfs, "Bach - Cello Suite.pdf")
+        # Create a setlist referencing this score
+        client.post("/api/setlists", json={"name": "Test"})
+        client.put("/api/setlists/Test", json={"items": [{
+            "type": "song",
+            "path": pdf_path,
+            "title": "Cello Suite",
+            "composer": "Bach",
+            "start_page": 1,
+            "end_page": None,
+        }]})
+        # Rename via tag update
+        resp = client.put("/api/scores/tags", json={
+            "path": pdf_path,
+            "filename_tags": ["baroque"],
+        })
+        assert resp.status_code == 200
+        new_path = resp.json()["score"]["filepath"]
+        # Verify setlist now references the new path
+        sl = client.get("/api/setlists/Test").json()
+        assert sl["items"][0]["path"] == new_path
+
+    def test_target_exists_returns_409(self, client, library_with_pdfs):
+        client.post("/api/library", json={"path": library_with_pdfs})
+        # Create a file that would collide
+        target = os.path.join(library_with_pdfs, "Bach - Cello Suite -- jazz.pdf")
+        with open(target, "wb") as f:
+            f.write(b"%PDF-1.4 fake")
+        resp = client.put("/api/scores/tags", json={
+            "path": os.path.join(library_with_pdfs, "Bach - Cello Suite.pdf"),
+            "filename_tags": ["jazz"],
+        })
+        assert resp.status_code == 409

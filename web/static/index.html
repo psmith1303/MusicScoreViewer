@@ -156,6 +156,7 @@
       <button id="btn-export" title="Download PDF with annotations">Export</button>
       <span class="toolbar-sep"></span>
       <button id="btn-add-to-setlist" title="Add to setlist (s)">+Setlist</button>
+      <button id="btn-edit-tags" title="Edit tags (g)">Tags</button>
       <span class="toolbar-sep"></span>
       <button id="btn-fullscreen" title="Toggle fullscreen (f)">Fullscreen</button>
     </div>
@@ -315,6 +316,24 @@
       <div id="login-error" style="color:#f88;font-size:13px;margin-top:6px"></div>
       <div class="dialog-buttons">
         <button type="submit" value="login">Login</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ================================================================== -->
+  <!-- Tag editor dialog                                                 -->
+  <!-- ================================================================== -->
+  <dialog id="tag-editor-dialog">
+    <form method="dialog">
+      <h3>Edit Tags</h3>
+      <div id="tag-editor-chips"></div>
+      <div class="dialog-row" style="display:flex;gap:8px">
+        <input type="text" id="tag-editor-input" placeholder="Add tag…" style="flex:1">
+        <button type="button" id="tag-editor-add">Add</button>
+      </div>
+      <div class="dialog-buttons">
+        <button type="button" id="tag-editor-cancel">Cancel</button>
+        <button type="submit" value="save">Save</button>
       </div>
     </form>
   </dialog>
