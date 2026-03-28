@@ -433,6 +433,7 @@ async function openScore(score) {
     pageInput.value = 1;
     await autoSideBySide();
     renderPage();
+    pdfContainer.focus();
   } catch (err) {
     if (err.message && err.message.includes("404")) {
       // File disappeared — rescan library and return to list
@@ -1113,8 +1114,13 @@ btnBack.addEventListener("click", () => {
 btnPrev.addEventListener("click", prevPage);
 btnNext.addEventListener("click", nextPage);
 
+// Reclaim focus so keyboard shortcuts (Space, Escape, etc.) work after
+// interacting with toolbar inputs (page number, size slider).
+pdfContainer.addEventListener("click", () => pdfContainer.focus());
+
 pageInput.addEventListener("change", () => {
   goToPage(parseInt(pageInput.value, 10) || 1);
+  pdfContainer.focus();
 });
 
 btnZoomFit.addEventListener("click", () => {
@@ -1508,6 +1514,10 @@ async function saveSetlistItems() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items: editingSetlistItems }),
     });
+    // Refresh the left sidebar so item/song counts stay current.
+    const data = await api("/api/setlists");
+    renderSetlistList(data.setlists);
+    setlistStatus.textContent = `${data.setlists.length} setlists`;
   } catch (err) {
     console.error("Failed to save setlist:", err);
   }
@@ -1643,6 +1653,7 @@ async function openSetlistSong(index, goToEnd = false) {
     pageInput.value = currentPage;
     await autoSideBySide();
     renderPage();
+    pdfContainer.focus();
   } catch (err) {
     if (err.message && err.message.includes("404")) {
       try { await api("/api/library/rescan", { method: "POST" }); } catch { /* ignore */ }

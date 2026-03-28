@@ -278,6 +278,7 @@ th.sortable:hover {
   overflow: auto;
   padding: 8px;
   background: var(--bg);
+  outline: none;
 }
 
 .page-wrap {
