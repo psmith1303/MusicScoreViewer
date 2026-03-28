@@ -35,7 +35,22 @@ export function initKeyboardShortcuts() {
     ) return;
 
     const s = getState();
-    if (!s.pdfDoc) return;
+
+    // Library/setlist view: Home/End scroll the list
+    if (!s.pdfDoc) {
+      if (e.key === "Home" || e.key === "End") {
+        const wrap = s.currentView === "library"
+          ? document.getElementById("library-table-wrap")
+          : s.currentView === "setlists"
+            ? document.getElementById("setlist-list-wrap")
+            : null;
+        if (wrap) {
+          e.preventDefault();
+          wrap.scrollTop = e.key === "Home" ? 0 : wrap.scrollHeight;
+        }
+      }
+      return;
+    }
 
     // Tool shortcuts
     switch (e.key) {

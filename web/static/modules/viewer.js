@@ -439,6 +439,7 @@ export function initViewerEvents() {
     s.displayMode = "fit";
     s.userLockedMode = true;
     updateModeButtons();
+    setTool("nav");
     renderPage();
   });
 
@@ -447,6 +448,7 @@ export function initViewerEvents() {
     s.displayMode = "wide";
     s.userLockedMode = true;
     updateModeButtons();
+    setTool("nav");
     renderPage();
   });
 
@@ -455,6 +457,7 @@ export function initViewerEvents() {
     s.displayMode = "2up";
     s.userLockedMode = true;
     updateModeButtons();
+    setTool("nav");
     renderPage();
   });
 

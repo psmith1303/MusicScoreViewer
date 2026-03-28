@@ -159,7 +159,8 @@ export function initLibraryEvents() {
       const names = await caches.keys();
       await Promise.all(names.map((n) => caches.delete(n)));
     }
-    loadLibrary();
+    await loadLibrary();
+    document.getElementById("library-table-wrap").scrollTop = 0;
   });
 
   btnLibrary.addEventListener("click", () => { showView("library"); loadLibrary(); });
