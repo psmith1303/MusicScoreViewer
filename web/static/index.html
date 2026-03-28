@@ -41,6 +41,7 @@
         <option value="">All Composers</option>
       </select>
       <button id="btn-reset" title="Clear all filters">Reset</button>
+      <button id="btn-offline" title="Offline cache settings">Offline</button>
     </div>
     <div id="tag-bar"></div>
     <div id="library-table-wrap">
@@ -50,6 +51,7 @@
             <th data-col="composer" class="sortable sort-asc">Composer ▲</th>
             <th data-col="title" class="sortable">Title</th>
             <th data-col="tags" class="sortable">Tags</th>
+            <th class="cache-col" title="Offline cache"></th>
           </tr>
         </thead>
         <tbody id="library-body"></tbody>
@@ -334,6 +336,21 @@
       <div class="dialog-buttons">
         <button type="button" id="tag-editor-cancel">Cancel</button>
         <button type="submit" value="save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ================================================================== -->
+  <!-- Offline cache dialog                                              -->
+  <!-- ================================================================== -->
+  <dialog id="offline-dialog">
+    <form method="dialog">
+      <h3>Offline Cache</h3>
+      <p id="offline-status">Checking cache…</p>
+      <div class="dialog-buttons" style="flex-wrap:wrap;gap:8px">
+        <button type="button" id="btn-refresh-library">Refresh Library Cache</button>
+        <button type="button" id="btn-clear-pdfs">Clear PDF Cache</button>
+        <button type="button" id="offline-close">Close</button>
       </div>
     </form>
   </dialog>

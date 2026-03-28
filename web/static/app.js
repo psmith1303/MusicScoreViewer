@@ -87,6 +87,7 @@ import {
 } from "./modules/dialog-handlers.js";
 import { initKeyboardShortcuts } from "./modules/keyboard.js";
 import { initTouchHandlers } from "./modules/touch.js";
+import { initCacheUI } from "./modules/cache.js";
 
 // Wire cross-module callbacks to break circular dependencies
 setLoadLibraryFn(loadLibrary);
@@ -102,6 +103,7 @@ initSetlistEvents();
 initDialogHandlers();
 initKeyboardShortcuts();
 initTouchHandlers();
+initCacheUI();
 
 // Service worker
 if ("serviceWorker" in navigator) {

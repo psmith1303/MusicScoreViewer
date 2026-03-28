@@ -6,7 +6,7 @@ import { getState } from "./state.js";
 import {
   textDialog, dirDialog, setlistNameDialog, songPickerDialog,
   setlistPickerDialog, setlistRefPickerDialog, loginDialog,
-  conflictDialog,
+  conflictDialog, offlineDialog,
 } from "./dom.js";
 import { setTool, doUndo } from "./annotations.js";
 import {
@@ -31,7 +31,8 @@ export function initKeyboardShortcuts() {
     if (
       textDialog.open || dirDialog.open || setlistNameDialog.open ||
       songPickerDialog.open || setlistPickerDialog.open ||
-      setlistRefPickerDialog.open || loginDialog.open || conflictDialog.open
+      setlistRefPickerDialog.open || loginDialog.open || conflictDialog.open ||
+      offlineDialog.open
     ) return;
 
     const s = getState();

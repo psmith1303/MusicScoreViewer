@@ -12,6 +12,7 @@ export const tagBar = $("#tag-bar");
 export const libraryBody = $("#library-body");
 export const libraryStatus = $("#library-status");
 export const btnReset = $("#btn-reset");
+export const btnOffline = $("#btn-offline");
 
 // Top bar
 export const btnLibrary = $("#btn-library");
@@ -114,6 +115,9 @@ export const conflictForce = $("#conflict-force");
 export const loginDialog = $("#login-dialog");
 export const loginInput = $("#login-input");
 export const loginError = $("#login-error");
+
+// Dialogs — offline cache
+export const offlineDialog = $("#offline-dialog");
 
 // Dialogs — tag editor
 export const tagEditorDialog = $("#tag-editor-dialog");

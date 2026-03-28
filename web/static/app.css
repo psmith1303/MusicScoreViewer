@@ -224,6 +224,24 @@ th.sortable:hover {
   background: var(--row-hover);
 }
 
+/* Cache column — narrow, right-aligned */
+.cache-col {
+  width: 36px;
+  text-align: center;
+  padding: 2px 4px !important;
+}
+
+.cache-btn {
+  font-size: 14px;
+  padding: 2px 6px;
+  min-width: 28px;
+}
+
+.cache-btn.cached {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 #library-status {
   padding: 4px 12px;
   font-size: 12px;
