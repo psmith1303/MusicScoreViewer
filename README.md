@@ -53,11 +53,11 @@ daily and requires no memorisation.
 
 ### Option 1: environment variable
 ```
-FOLIO_AUTH_SALT=psmith python3 -m uvicorn web.server:app --host 0.0.0.0 --port 8989
+FOLIO_AUTH_SALT=xyzzy python3 -m uvicorn web.server:app --host 0.0.0.0 --port 8989
 ```
 
 ### Option 2: config file
-Add `"auth_salt": "psmith"` to `~/.folio/web_config.json`.
+Add `"auth_salt": "xyzzy"` to `~/.folio/web_config.json`.
 
 Once authenticated, a 30-day session cookie is set — no need to re-enter
 the passphrase on every visit.  With no salt configured, auth is disabled.
