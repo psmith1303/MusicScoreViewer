@@ -9,13 +9,16 @@ import { libraryBody, libraryStatus } from "./dom.js";
 // SW communication
 // ---------------------------------------------------------------------------
 
-function swMessage(type, payload = {}) {
+async function swMessage(type, payload = {}) {
+  if (!navigator.serviceWorker) {
+    throw new Error("Service workers not supported");
+  }
+  const reg = await navigator.serviceWorker.ready;
+  const sw = reg.active;
+  if (!sw) {
+    throw new Error("No active service worker");
+  }
   return new Promise((resolve, reject) => {
-    const sw = navigator.serviceWorker?.controller;
-    if (!sw) {
-      reject(new Error("No active service worker"));
-      return;
-    }
     const ch = new MessageChannel();
     ch.port1.onmessage = (e) => resolve(e.data);
     sw.postMessage({ type, payload }, [ch.port2]);

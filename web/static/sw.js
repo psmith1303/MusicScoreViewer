@@ -1,4 +1,4 @@
-const SHELL_CACHE = "folio-v4";
+const SHELL_CACHE = "folio-v5";
 const PDF_CACHE = "folio-pdfs-v1";
 const MAX_CACHED_PDFS = 30;
 
@@ -107,15 +107,13 @@ async function evictIfNeeded() {
 // URL normalization — strip cache-buster _t param from PDF URLs
 // ---------------------------------------------------------------------------
 
-function normalizePdfUrl(url) {
-  const u = new URL(url);
-  u.searchParams.delete("_t");
-  return u.pathname + "?" + u.searchParams.toString();
+function pdfCacheKey(url) {
+  const path = new URL(url).searchParams.get("path");
+  return "/api/pdf?path=" + encodeURIComponent(path);
 }
 
 function getPathFromPdfUrl(url) {
-  const u = new URL(url);
-  return u.searchParams.get("path");
+  return new URL(url).searchParams.get("path");
 }
 
 // ---------------------------------------------------------------------------
@@ -201,12 +199,12 @@ self.addEventListener("fetch", (e) => {
 });
 
 async function handlePdfFetch(request) {
-  const normalizedKey = normalizePdfUrl(request.url);
+  const cacheKey = pdfCacheKey(request.url);
   const pdfPath = getPathFromPdfUrl(request.url);
   const cache = await caches.open(PDF_CACHE);
 
   // Check cache first
-  const cached = await cache.match(normalizedKey);
+  const cached = await cache.match(cacheKey);
   if (cached) {
     // Update LRU timestamp in background
     if (pdfPath) touchLruEntry(pdfPath, 0).catch(() => {});
@@ -217,8 +215,7 @@ async function handlePdfFetch(request) {
   const resp = await fetch(request);
   if (resp.ok && pdfPath) {
     const clone = resp.clone();
-    // Store with normalized URL (no _t param)
-    await cache.put(normalizedKey, clone);
+    await cache.put(cacheKey, clone);
     const size = parseInt(resp.headers.get("content-length") || "0", 10);
     await touchLruEntry(pdfPath, size);
     evictIfNeeded().catch(() => {});
