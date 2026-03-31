@@ -259,6 +259,10 @@ th.sortable:hover {
   height: calc(100vh - 40px);
 }
 
+#viewer.pseudo-fullscreen {
+  height: 100vh;
+}
+
 #viewer-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -657,6 +661,9 @@ dialog p {
   }
   #library-view, #setlist-view, #viewer {
     height: calc(100vh - 40px - env(safe-area-inset-top));
+  }
+  #viewer.pseudo-fullscreen {
+    height: 100vh;
   }
   #viewer-toolbar, #setlist-detail-toolbar {
     padding-left: max(12px, env(safe-area-inset-left));

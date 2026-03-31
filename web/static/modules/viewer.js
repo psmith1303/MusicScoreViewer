@@ -364,6 +364,7 @@ export function applyFullscreen(fs) {
   btnFullscreen.textContent = fs ? "Exit FS" : "Fullscreen";
   document.getElementById("topbar").classList.toggle("hidden", fs);
   document.getElementById("viewer-toolbar").classList.toggle("hidden", fs);
+  document.getElementById("viewer").classList.toggle("pseudo-fullscreen", fs);
   if (s.pdfDoc) renderPage();
 }
 
