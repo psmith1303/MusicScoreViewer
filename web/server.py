@@ -206,10 +206,11 @@ app = FastAPI(title="Folio", version="2.4.1", docs_url=None, redoc_url=None)
 
 @app.on_event("startup")
 def _log_startup():
-    # Apply timestamp format to uvicorn's loggers (now that they're configured)
+    # Update format on uvicorn's existing formatters (preserves color support)
     for name, fmt in [("uvicorn", LOG_FORMAT), ("uvicorn.access", ACCESS_FORMAT)]:
         for handler in logging.getLogger(name).handlers:
-            handler.setFormatter(logging.Formatter(fmt, datefmt=LOG_DATEFMT))
+            handler.formatter._fmt = fmt
+            handler.formatter.datefmt = LOG_DATEFMT
     logging.info("Folio v%s starting", app.version)
 
 
