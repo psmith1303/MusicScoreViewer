@@ -42,10 +42,10 @@ from .core import (
 # Logging
 # ---------------------------------------------------------------------------
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+ACCESS_FORMAT = '%(asctime)s - %(levelname)s - %(client_addr)s - "%(request_line)s" %(status_code)s'
+
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 
 # ---------------------------------------------------------------------------
 # Application state
@@ -205,6 +205,10 @@ app = FastAPI(title="Folio", version="2.4.1", docs_url=None, redoc_url=None)
 
 @app.on_event("startup")
 def _log_startup():
+    # Apply timestamp format to uvicorn's loggers (now that they're configured)
+    for name, fmt in [("uvicorn", LOG_FORMAT), ("uvicorn.access", ACCESS_FORMAT)]:
+        for handler in logging.getLogger(name).handlers:
+            handler.setFormatter(logging.Formatter(fmt))
     logging.info("Folio v%s starting", app.version)
 
 
