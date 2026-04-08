@@ -34,6 +34,18 @@ function saveRecentList(list) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
 }
 
+export function updateRecentFilepath(oldPath, newPath) {
+  const list = loadRecentList();
+  let changed = false;
+  for (const entry of list) {
+    if (entry.filepath === oldPath) {
+      entry.filepath = newPath;
+      changed = true;
+    }
+  }
+  if (changed) saveRecentList(list);
+}
+
 export function addToRecent(score) {
   const list = loadRecentList();
   const filtered = list.filter((e) => e.filepath !== score.filepath);

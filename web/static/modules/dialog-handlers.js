@@ -18,6 +18,7 @@ import {
 } from "./dom.js";
 import { api, login, setLoginHandler } from "./api.js";
 import { esc } from "./utils.js";
+import { updateRecentFilepath } from "./recent.js";
 import {
   saveAnnotations, drawAnnotations,
   setConflictHandler, setTextDialogHandler,
@@ -295,6 +296,7 @@ function initTagEditorDialog() {
   tagEditorDialog.addEventListener("close", async () => {
     if (tagEditorDialog.returnValue !== "save") return;
     const s = getState();
+    const oldPath = s.currentScore.filepath;
     try {
       const data = await api("/api/scores/tags", {
         method: "PUT",
@@ -310,6 +312,9 @@ function initTagEditorDialog() {
       s.currentScore.folder_tags = data.score.folder_tags;
       s.currentScore.filename_tags = data.score.filename_tags;
       titleDisplay.textContent = `${s.currentScore.composer} \u2014 ${s.currentScore.title}`;
+      if (oldPath !== data.score.filepath) {
+        updateRecentFilepath(oldPath, data.score.filepath);
+      }
     } catch (err) {
       console.error("Failed to update tags:", err);
       alert("Failed to update tags: " + err.message);

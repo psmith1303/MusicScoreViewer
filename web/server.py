@@ -16,6 +16,7 @@ import re
 import secrets
 import time
 from collections import defaultdict
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -201,11 +202,9 @@ if _last:
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
-app = FastAPI(title="Folio", version="2.4.2", docs_url=None, redoc_url=None)
 
-
-@app.on_event("startup")
-def _log_startup():
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
     # Update format on uvicorn's existing formatters (preserves color support)
     for name, fmt in [("uvicorn", LOG_FORMAT), ("uvicorn.access", ACCESS_FORMAT)]:
         for handler in logging.getLogger(name).handlers:
@@ -219,6 +218,13 @@ def _log_startup():
     log.setLevel(uv.level)
     log.propagate = False
     log.info("Folio v%s starting", app.version)
+    yield
+
+
+app = FastAPI(
+    title="Folio", version="2.4.3",
+    docs_url=None, redoc_url=None, lifespan=_lifespan,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -629,7 +635,7 @@ def export_pdf(path: str = Query(..., description="Score filepath")):
     except Exception:
         log.exception("PDF export failed for %s", resolved)
         raise HTTPException(status_code=500, detail="Export failed")
-    basename = re.sub(r'[^\w.\- ]', '_', os.path.basename(resolved))
+    basename = re.sub(r'[^a-zA-Z0-9_.\- ]', '_', os.path.basename(resolved))
     filename = f"annotated_{basename}"
     return Response(
         content=pdf_bytes,

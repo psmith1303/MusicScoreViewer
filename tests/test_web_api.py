@@ -21,6 +21,9 @@ def reset_state(tmp_path, monkeypatch):
     state.scores = []
     state.config = {"last_directory": "", "allowed_roots": []}
     srv._rate_buckets.clear()
+    srv._login_buckets.clear()
+    srv._login_failures.clear()
+    srv._lockouts.clear()
     yield
     state.library_dir = ""
     state.scores = []

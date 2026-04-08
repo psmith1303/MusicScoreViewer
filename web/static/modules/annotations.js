@@ -148,9 +148,22 @@ export function rotatePage(delta) {
 // Save annotations
 // ---------------------------------------------------------------------------
 
-export async function saveAnnotations(force = false) {
-  const s = getState();
-  if (!s.currentScore) return;
+// Serialize saves so each one waits for the previous to complete,
+// preventing false etag conflicts from concurrent in-flight requests.
+let _saveChain = Promise.resolve();
+
+export function saveAnnotations(force = false) {
+  const filepath = getState().currentScore?.filepath;
+  _saveChain = _saveChain.then(() => {
+    const s = getState();
+    if (!s.currentScore || s.currentScore.filepath !== filepath) return;
+    return _doSaveAnnotations(s, force);
+  }).catch((err) => {
+    console.error("Save chain error:", err);
+  });
+}
+
+async function _doSaveAnnotations(s, force) {
   try {
     const payload = {
       path: s.currentScore.filepath,

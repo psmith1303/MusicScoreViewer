@@ -17,7 +17,6 @@ import {
   libraryStatus,
 } from "./dom.js";
 import { api } from "./api.js";
-import { esc } from "./utils.js";
 import { showView } from "./views.js";
 import { drawAnnotations, setTool, setNavCallbacks, setRenderPageFn } from "./annotations.js";
 import { addToRecent } from "./recent.js";
@@ -93,7 +92,9 @@ export async function openScore(score) {
       showView("library");
       libraryStatus.textContent = `"${score.title}" is no longer available — library refreshed`;
     } else {
-      pdfContainer.innerHTML = `<p style="color:#f88;padding:20px">Failed to load PDF: ${esc(err.message)}</p>`;
+      cleanupScore();
+      showView("library");
+      libraryStatus.textContent = `Failed to load "${score.title}": ${err.message}`;
     }
   }
 }
@@ -143,7 +144,9 @@ export async function openSetlistSong(index, goToEnd = false) {
       showView("library");
       libraryStatus.textContent = `"${song.title}" is no longer available — library refreshed`;
     } else {
-      pdfContainer.innerHTML = `<p style="color:#f88;padding:20px">Failed to load PDF: ${esc(err.message)}</p>`;
+      cleanupScore();
+      showView("library");
+      libraryStatus.textContent = `Failed to load "${song.title}": ${err.message}`;
     }
   }
 }

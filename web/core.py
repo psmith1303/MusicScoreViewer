@@ -272,10 +272,8 @@ def pdf_page_count(filepath: str) -> int:
     """Return the number of pages in a PDF without rendering anything."""
     import pymupdf as fitz
 
-    doc = fitz.open(filepath)
-    count = len(doc)
-    doc.close()
-    return count
+    with fitz.open(filepath) as doc:
+        return len(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -411,28 +409,26 @@ def export_annotated_pdf(pdf_path: str) -> bytes:
     pages = data.get("pages", {})
     rots = data.get("rotations", {})
 
-    doc = fitz.open(pdf_path)
-    for pg_str, annots in pages.items():
-        pg_num = int(pg_str)
-        if pg_num >= len(doc):
-            continue
-        page = doc[pg_num]
-        w = page.rect.width
-        h = page.rect.height
+    with fitz.open(pdf_path) as doc:
+        for pg_str, annots in pages.items():
+            pg_num = int(pg_str)
+            if pg_num >= len(doc):
+                continue
+            page = doc[pg_num]
+            w = page.rect.width
+            h = page.rect.height
 
-        for a in annots:
-            if a.get("type") == "ink":
-                _export_ink(page, a, w, h)
-            elif a.get("type") == "text":
-                _export_text(page, a, w, h)
+            for a in annots:
+                if a.get("type") == "ink":
+                    _export_ink(page, a, w, h)
+                elif a.get("type") == "text":
+                    _export_text(page, a, w, h)
 
-        rot = rots.get(pg_str, 0) % 360
-        if rot:
-            page.set_rotation((page.rotation + rot) % 360)
+            rot = rots.get(pg_str, 0) % 360
+            if rot:
+                page.set_rotation((page.rotation + rot) % 360)
 
-    result = doc.tobytes()
-    doc.close()
-    return result
+        return doc.tobytes()
 
 
 def _export_ink(page, annot: dict, w: float, h: float) -> None:

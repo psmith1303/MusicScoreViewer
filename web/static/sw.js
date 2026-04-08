@@ -1,4 +1,4 @@
-const SHELL_CACHE = "folio-v9";
+const SHELL_CACHE = "folio-v10";
 const PDF_CACHE = "folio-pdfs-v1";
 const MAX_AUTO_CACHED = 30;
 
@@ -218,32 +218,35 @@ async function handlePdfFetch(request) {
   const pdfPath = getPathFromPdfUrl(request.url);
   const cache = await caches.open(PDF_CACHE);
 
-  // Check cache for full response
-  const cached = await cache.match(cacheKey);
-  if (cached) {
-    // Return full cached response (works even if browser sent Range header)
-    if (pdfPath) touchLruEntry(pdfPath, 0, false).catch(() => {});
-    return cached;
-  }
+  // Network-first: serve fresh PDFs when online, fall back to cache offline
+  try {
+    const resp = await fetch(request);
 
-  // Not cached — pass original request through to network
-  const resp = await fetch(request);
-
-  if (pdfPath) {
-    if (resp.status === 200) {
-      // Full response — cache directly
-      const clone = resp.clone();
-      await cache.put(cacheKey, clone);
-      const size = parseInt(resp.headers.get("content-length") || "0", 10);
-      await touchLruEntry(pdfPath, size, false);
-      evictIfNeeded().catch(() => {});
-    } else if (resp.status === 206) {
-      // Partial (Range) response — fetch full file in background for caching
-      cacheFullPdfInBackground(pdfPath, cacheKey);
+    if (pdfPath) {
+      if (resp.status === 200) {
+        const clone = resp.clone();
+        await cache.put(cacheKey, clone);
+        const size = parseInt(resp.headers.get("content-length") || "0", 10);
+        await touchLruEntry(pdfPath, size, false);
+        evictIfNeeded().catch(() => {});
+      } else if (resp.status === 206) {
+        cacheFullPdfInBackground(pdfPath, cacheKey);
+      }
     }
-  }
 
-  return resp;
+    return resp;
+  } catch {
+    // Network failure — serve from cache for offline use
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      if (pdfPath) touchLruEntry(pdfPath, 0, false).catch(() => {});
+      return cached;
+    }
+    return new Response("Offline — PDF not cached", {
+      status: 503,
+      headers: { "Content-Type": "text/plain" },
+    });
+  }
 }
 
 function cacheFullPdfInBackground(pdfPath, cacheKey) {
