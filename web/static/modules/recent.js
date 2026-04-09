@@ -53,10 +53,30 @@ export function addToRecent(score) {
     filepath: score.filepath,
     composer: score.composer,
     title: score.title,
+    content_hash: score.content_hash || "",
     timestamp: Date.now(),
   });
   if (filtered.length > MAX_RECENT) filtered.length = MAX_RECENT;
   saveRecentList(filtered);
+}
+
+export function healRecentList(scores) {
+  const list = loadRecentList();
+  if (list.length === 0) return;
+  const pathSet = new Set(scores.map((s) => s.filepath));
+  const hashToPath = new Map();
+  for (const s of scores) {
+    if (s.content_hash) hashToPath.set(s.content_hash, s.filepath);
+  }
+  let changed = false;
+  for (const entry of list) {
+    if (pathSet.has(entry.filepath)) continue;
+    if (entry.content_hash && hashToPath.has(entry.content_hash)) {
+      entry.filepath = hashToPath.get(entry.content_hash);
+      changed = true;
+    }
+  }
+  if (changed) saveRecentList(list);
 }
 
 // ---------------------------------------------------------------------------

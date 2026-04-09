@@ -15,6 +15,7 @@ from web.core import (
     annotation_sidecar_path,
     annotations_etag,
     build_tagged_filename,
+    compute_content_hash,
     load_annotations,
     normalize_path,
     portable_path,
@@ -94,6 +95,49 @@ class TestSafeJSONSave:
 # ---------------------------------------------------------------------------
 
 
+class TestComputeContentHash:
+    def test_returns_12_hex_chars(self, tmp_path):
+        f = tmp_path / "test.pdf"
+        f.write_bytes(b"%PDF-1.4 some content here")
+        h = compute_content_hash(str(f))
+        assert len(h) == 12
+        assert all(c in "0123456789abcdef" for c in h)
+
+    def test_same_content_same_hash(self, tmp_path):
+        content = b"%PDF-1.4 identical"
+        f1 = tmp_path / "a.pdf"
+        f2 = tmp_path / "b.pdf"
+        f1.write_bytes(content)
+        f2.write_bytes(content)
+        assert compute_content_hash(str(f1)) == compute_content_hash(str(f2))
+
+    def test_different_content_different_hash(self, tmp_path):
+        f1 = tmp_path / "a.pdf"
+        f2 = tmp_path / "b.pdf"
+        f1.write_bytes(b"%PDF-1.4 content A")
+        f2.write_bytes(b"%PDF-1.4 content B")
+        assert compute_content_hash(str(f1)) != compute_content_hash(str(f2))
+
+    def test_nonexistent_file_returns_empty(self):
+        assert compute_content_hash("/nonexistent/file.pdf") == ""
+
+    def test_stable_after_rename(self, tmp_path):
+        f = tmp_path / "original.pdf"
+        f.write_bytes(b"%PDF-1.4 data")
+        h1 = compute_content_hash(str(f))
+        renamed = tmp_path / "renamed.pdf"
+        os.rename(str(f), str(renamed))
+        h2 = compute_content_hash(str(renamed))
+        assert h1 == h2
+
+    def test_large_file(self, tmp_path):
+        """Files larger than 8KB use head + tail."""
+        f = tmp_path / "big.pdf"
+        f.write_bytes(b"A" * 5000 + b"B" * 5000)
+        h = compute_content_hash(str(f))
+        assert len(h) == 12
+
+
 class TestScore:
     def test_composer_title_parsing(self):
         s = Score("/music/Bach - Cello Suite.pdf", "Bach - Cello Suite.pdf")
@@ -122,6 +166,7 @@ class TestScore:
         assert d["composer"] == "Bach"
         assert d["title"] == "Suite"
         assert isinstance(d["tags"], list)
+        assert "content_hash" in d
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +196,12 @@ class TestScanLibrary:
     def test_scan_nonexistent_raises(self):
         with pytest.raises(FileNotFoundError):
             scan_library("/nonexistent/path")
+
+    def test_scan_populates_content_hash(self, tmp_path):
+        (tmp_path / "score.pdf").write_bytes(b"%PDF-1.4 data")
+        result = scan_library(str(tmp_path))
+        assert len(result) == 1
+        assert len(result[0].content_hash) == 12
 
     def test_scan_empty_dir(self, tmp_path):
         assert scan_library(str(tmp_path)) == []
@@ -410,3 +461,11 @@ class TestRenameScoreTags:
         assert "classical" in new_score.folder_tags
         assert "jazz" in new_score.filename_tags
         assert new_score.tags == {"classical", "jazz"}
+
+    def test_content_hash_preserved(self, tmp_path):
+        pdf = tmp_path / "Bach - Suite.pdf"
+        pdf.write_bytes(b"%PDF-1.4 content")
+        score = Score(str(pdf), pdf.name)
+        score.content_hash = compute_content_hash(str(pdf))
+        new_score = rename_score_tags(score, {"jazz"})
+        assert new_score.content_hash == score.content_hash

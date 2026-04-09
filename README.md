@@ -12,7 +12,8 @@ Runs on any device with a browser, including iPad.
 - Add scores to setlists directly from the viewer (`s` key)
 - Click-to-navigate in Fit/2-up modes: right/bottom half = next page, left/top half = previous
 - Wide mode: scroll vertically, arrow/space keys scroll natively; page turns via toolbar, PageUp/PageDown, or scroll-boundary in fullscreen
-- Keyboard shortcuts for page navigation and tool switching
+- Configurable keyboard shortcuts for navigation, tools, and view switching
+- Content-hash based identity: renamed/moved PDFs are auto-detected on rescan, healing setlist references, annotation sidecars, and recent list entries
 - Setlist management: create, edit, reorder, rename, delete, playback with page constraints
 - Nested setlists: setlists can reference other setlists as sub-items, with automatic flattening for playback
 - Dark/light theme toggle (remembered across sessions)
@@ -62,6 +63,55 @@ Add `"auth_salt": "xyzzy"` to `~/.folio/web_config.json`.
 Once authenticated, a 30-day session cookie is set — no need to re-enter
 the passphrase on every visit.  With no salt configured, auth is disabled.
 
+## Keyboard Shortcuts
+
+All shortcuts are configurable via `~/.folio/web_config.json` (see below).
+
+### Global (work from any view)
+
+| Default | Action |
+|---|---|
+| Alt+L | Switch to Library view |
+| Alt+S | Switch to Setlists view |
+| Alt+R | Switch to Recent view |
+| Ctrl+F | Focus search input |
+| Ctrl+R | Reset filters and rescan library |
+
+### Score viewer
+
+| Default | Action |
+|---|---|
+| Space, n, →, ↓, PgDn | Next page (in Wide mode, ↓/↑/Space scroll natively) |
+| Backspace, p, ←, ↑, PgUp | Previous page |
+| Home / End | First / last page |
+| Escape | Back to library (or exit fullscreen) |
+| v / d / t / e | Nav / Pen / Text / Eraser tool |
+| s | Add current score to a setlist |
+| g | Edit tags |
+| f | Toggle fullscreen |
+| r / Shift+R | Rotate page CW / CCW |
+| Ctrl+Z | Undo |
+
+### Customising shortcuts
+
+Add a `"keybindings"` object to `~/.folio/web_config.json`. Only the keys you
+want to change need to be specified — defaults are used for the rest.
+
+```json
+{
+  "keybindings": {
+    "go_library": "Alt+1",
+    "go_setlists": "Alt+2",
+    "toggle_fullscreen": "Ctrl+Shift+f"
+  }
+}
+```
+
+Binding format: modifiers joined with `+` before the key name.
+Modifiers: `Ctrl`, `Alt`, `Shift`, `Meta`. Key names match
+[KeyboardEvent.key](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values)
+(e.g. `ArrowRight`, `Escape`, `a`, `F2`).
+
 ## Running the Tests
 
 ### Install test dependencies
@@ -78,8 +128,8 @@ python3 -m pytest -v
 
 | File | Tests | What is tested |
 |---|---|---|
-| `tests/test_web_core.py` | 36 | `web.core` module: path utils, SafeJSON, Score parsing, library scanning (.exclude support), annotation load/save/migration, etag, conflict detection |
-| `tests/test_web_api.py` | 72 | FastAPI endpoints: config, library, PDF serving, annotation CRUD, rotation, etag/conflict, setlist CRUD/rename, nested setlists (refs, flattening, cycle detection, rename cascading, backward compat), PDF export, path traversal, security, auth |
+| `tests/test_web_core.py` | 50 | `web.core` module: path utils, SafeJSON, Score parsing, content hashing, library scanning (.exclude support), annotation load/save/migration, etag, conflict detection, tag renaming |
+| `tests/test_web_api.py` | 93 | FastAPI endpoints: config (keybindings), library, PDF serving, annotation CRUD, rotation, etag/conflict, setlist CRUD/rename, nested setlists (refs, flattening, cycle detection, rename cascading, backward compat), PDF export, content-hash reference healing, path traversal, security, auth |
 
 ## Emacs Editing
 
@@ -117,27 +167,57 @@ column.  Requires Emacs 27+; no external packages needed.
 
 ### Frontend (`web/static/`)
 
+The frontend is split into ES modules under `web/static/modules/`:
+
+| Module | Description |
+|---|---|
+| `state.js` | Centralized application state |
+| `api.js` | Fetch wrapper with retry, auth redirect, cache-busting |
+| `dom.js` | DOM element references |
+| `views.js` | View switching (library, setlists, recent, viewer) |
+| `library.js` | Library loading, rendering, sorting, filtering |
+| `viewer.js` | PDF rendering, page navigation, display modes, fullscreen |
+| `annotations.js` | Drawing, tools, pointer events, save/load with etag concurrency |
+| `setlists.js` | Setlist CRUD, drag-and-drop reorder, playback |
+| `keyboard.js` | Configurable keyboard shortcuts (data-driven from server config) |
+| `touch.js` | Touch gestures — swipe navigation, double-tap, scroll-boundary page turns |
+| `recent.js` | Recent files list with content-hash based healing |
+| `cache.js` | Offline cache UI (pin/unpin PDFs) |
+| `dialog-handlers.js` | Per-dialog show/close logic |
+| `theme.js` | Dark/light theme toggle |
+| `utils.js` | Shared utilities (HTML escaping, coordinate transforms, constants) |
+
+Other static files:
+
 | File | Description |
 |---|---|
-| `web/static/app.js` | ES module: pdf.js rendering, annotation canvas overlay (pen/text/eraser/undo), library UI, keyboard/touch navigation. |
-| `web/static/app.css` | Dark/light theme, responsive layout, annotation toolbar styles. |
-| `web/static/index.html` | Single-page app shell. |
+| `app.js` | Entry point: imports, wiring, boot sequence |
+| `app.css` | Dark/light theme, responsive layout, safe-area support |
+| `index.html` | Single-page app shell |
+| `sw.js` | Service worker: stale-while-revalidate PDF caching, offline support, LRU eviction |
+
+### File naming convention
+
+PDF filenames encode metadata: `Composer - Title -- tag1 tag2.pdf`
+
+- `" - "` (space-dash-space) separates composer from title. Hyphenated composers (e.g. Rimsky-Korsakov) are safe.
+- `" -- "` (space-double-dash-space) separates tags. Tags are space-delimited, lowercase. Use underscores for multi-word tags (e.g. `2nd_horn`).
+- Subdirectory names become folder tags automatically (read-only).
+- Files without `" - "` use the whole basename as the title, with composer set to "Unknown".
+
+### Content-hash identity
+
+Each PDF gets a fast content hash (SHA-256 of first/last 4 KB + file size). A persistent `_hash_index.json` in the library directory tracks hashes across scans. When a PDF is renamed or moved externally, the next library scan detects the change and automatically heals:
+- Setlist references (updates paths in `setlists.json`)
+- Annotation sidecars (moves the `.json` file to match the new PDF name)
+- Recent list entries (client-side, matched by content hash)
 
 ### File formats
 
 - **`setlists.json`** — setlist definitions, written to the root of the music library folder; see `docs/setlist-file-format.md` for the full specification.
 - **`<score>.json`** — annotation sidecar written alongside each PDF; versioned JSON containing per-page annotation lists and rotation overrides.
+- **`_hash_index.json`** — content-hash-to-path index, auto-generated in the library directory; used to detect renames between scans.
 
-### Keyboard shortcuts (score viewer)
+### Keyboard shortcuts
 
-| Key | Action |
-|---|---|
-| Space, n, →, ↓, PgDn | Next page (in Wide mode, ↓/↑/Space scroll natively) |
-| Backspace, p, ←, ↑, PgUp | Previous page |
-| Home / End | First / last page |
-| Escape | Back to library (or exit fullscreen) |
-| v / d / t / e | Nav / Pen / Text / Eraser tool |
-| s | Add current score to a setlist |
-| f | Toggle fullscreen |
-| r / R | Rotate page CW / CCW |
-| Ctrl+Z | Undo |
+See the [Keyboard Shortcuts](#keyboard-shortcuts) section above for defaults and customisation.

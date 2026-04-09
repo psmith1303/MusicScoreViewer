@@ -50,6 +50,35 @@ def portable_path(path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Content identity
+# ---------------------------------------------------------------------------
+
+_HASH_CHUNK = 4096
+
+
+def compute_content_hash(filepath: str) -> str:
+    """Compute a fast content hash from a file's first/last 4 KB and size.
+
+    Returns a 12-char hex string, or "" if the file cannot be read.
+    """
+    try:
+        size = os.path.getsize(filepath)
+        h = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            head = f.read(_HASH_CHUNK)
+            h.update(head)
+            if size > _HASH_CHUNK * 2:
+                f.seek(-_HASH_CHUNK, 2)
+                h.update(f.read(_HASH_CHUNK))
+            elif size > _HASH_CHUNK:
+                h.update(f.read())
+        h.update(str(size).encode())
+        return h.hexdigest()[:12]
+    except OSError:
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # SafeJSON — Atomic JSON persistence (no Tk dialogs)
 # ---------------------------------------------------------------------------
 
@@ -131,6 +160,7 @@ class Score:
     title: str = ""
     folder_tags: set[str] = field(default_factory=set)
     filename_tags: set[str] = field(default_factory=set)
+    content_hash: str = ""
 
     @property
     def tags(self) -> set[str]:
@@ -144,6 +174,7 @@ class Score:
         self.title = ""
         self.folder_tags = set()
         self.filename_tags = set()
+        self.content_hash = ""
         if folder_tags:
             self.folder_tags.update(t.lower() for t in folder_tags if t)
         self._parse()
@@ -176,6 +207,7 @@ class Score:
             "tags": sorted(self.tags),
             "folder_tags": sorted(self.folder_tags),
             "filename_tags": sorted(self.filename_tags),
+            "content_hash": self.content_hash,
         }
 
 
@@ -231,7 +263,9 @@ def rename_score_tags(score: Score, new_tags: set[str]) -> Score:
             os.rename(new_filepath, score.filepath)
             raise
 
-    return Score(new_filepath, new_filename, score.folder_tags)
+    new_score = Score(new_filepath, new_filename, score.folder_tags)
+    new_score.content_hash = score.content_hash
+    return new_score
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +293,9 @@ def scan_library(path: str) -> list[Score]:
         ftags = {p for p in parts if p and p != "."}
         for f in files:
             if f.lower().endswith(".pdf"):
-                found.append(Score(os.path.join(root_dir, f), f, ftags))
+                score = Score(os.path.join(root_dir, f), f, ftags)
+                score.content_hash = compute_content_hash(score.filepath)
+                found.append(score)
     return found
 
 

@@ -72,6 +72,23 @@ class TestGetConfig:
         assert "library_dir" in data
         assert "score_count" in data
 
+    def test_returns_default_keybindings(self, client):
+        resp = client.get("/api/config")
+        kb = resp.json()["keybindings"]
+        assert kb["go_library"] == "Alt+l"
+        assert kb["go_setlists"] == "Alt+s"
+        assert kb["go_recent"] == "Alt+r"
+        assert kb["focus_search"] == "Ctrl+f"
+        assert kb["tool_nav"] == "v"
+
+    def test_user_keybinding_overrides(self, client):
+        state.config["keybindings"] = {"go_library": "Alt+1"}
+        resp = client.get("/api/config")
+        kb = resp.json()["keybindings"]
+        assert kb["go_library"] == "Alt+1"
+        # Other defaults still present
+        assert kb["go_setlists"] == "Alt+s"
+
 
 # ---------------------------------------------------------------------------
 # POST /api/library
@@ -929,3 +946,105 @@ class TestUpdateTags:
             "filename_tags": ["jazz"],
         })
         assert resp.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Content hash and reference healing
+# ---------------------------------------------------------------------------
+
+
+class TestContentHash:
+    def test_library_response_includes_hash(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.get("/api/library")
+        scores = resp.json()["scores"]
+        for s in scores:
+            assert "content_hash" in s
+            assert len(s["content_hash"]) == 12
+
+    def test_tag_rename_preserves_hash(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        path = os.path.join(library_with_pdfs, "Bach - Cello Suite.pdf")
+        orig_hash = next(
+            s.content_hash for s in state.scores
+            if "Bach" in s.composer
+        )
+        resp = client.put("/api/scores/tags", json={
+            "path": path,
+            "filename_tags": ["jazz"],
+        })
+        assert resp.status_code == 200
+        assert resp.json()["score"]["content_hash"] == orig_hash
+
+
+class TestHealReferences:
+    def test_heal_setlist_after_external_rename(self, tmp_path):
+        """Externally renaming a PDF heals setlist references on rescan."""
+        pdf = tmp_path / "Bach - Suite.pdf"
+        pdf.write_bytes(b"%PDF-1.4 bach suite content")
+        state.set_library(str(tmp_path))
+
+        # Add to setlist
+        from web.core import SafeJSON, portable_path
+        setlist_data = {"My Set": [
+            {"type": "song", "path": portable_path(str(pdf)),
+             "title": "Suite", "composer": "Bach"},
+        ]}
+        SafeJSON.save(state.setlist_path(), setlist_data)
+
+        # Rename externally
+        new_pdf = tmp_path / "Bach - Cello Suite No 1.pdf"
+        os.rename(str(pdf), str(new_pdf))
+
+        # Rescan
+        state.set_library(str(tmp_path))
+
+        # Check setlist was healed
+        data = SafeJSON.load(state.setlist_path(), default={})
+        assert data["My Set"][0]["path"] == portable_path(str(new_pdf))
+
+    def test_heal_annotation_sidecar_after_rename(self, tmp_path):
+        """Externally renaming a PDF moves its annotation sidecar."""
+        pdf = tmp_path / "Bach - Suite.pdf"
+        pdf.write_bytes(b"%PDF-1.4 annotation test")
+        sidecar = tmp_path / "Bach - Suite.json"
+        sidecar.write_text('{"version":2,"pages":{},"rotations":{}}')
+        state.set_library(str(tmp_path))
+
+        # Rename externally
+        new_pdf = tmp_path / "Bach - Suite No 1.pdf"
+        os.rename(str(pdf), str(new_pdf))
+
+        # Rescan
+        state.set_library(str(tmp_path))
+
+        # Old sidecar gone, new one exists
+        assert not sidecar.exists()
+        new_sidecar = tmp_path / "Bach - Suite No 1.json"
+        assert new_sidecar.exists()
+
+    def test_no_heal_when_paths_unchanged(self, tmp_path):
+        """Rescan with no renames doesn't modify setlists."""
+        pdf = tmp_path / "Bach - Suite.pdf"
+        pdf.write_bytes(b"%PDF-1.4 stable")
+        state.set_library(str(tmp_path))
+
+        from web.core import SafeJSON, portable_path
+        setlist_data = {"My Set": [
+            {"type": "song", "path": portable_path(str(pdf)),
+             "title": "Suite", "composer": "Bach"},
+        ]}
+        SafeJSON.save(state.setlist_path(), setlist_data)
+        mtime = os.path.getmtime(state.setlist_path())
+
+        # Rescan — no changes
+        state.set_library(str(tmp_path))
+
+        # Setlist file not rewritten
+        assert os.path.getmtime(state.setlist_path()) == mtime
+
+    def test_first_scan_creates_hash_index(self, tmp_path):
+        """First scan creates _hash_index.json without errors."""
+        (tmp_path / "score.pdf").write_bytes(b"%PDF-1.4 first")
+        state.set_library(str(tmp_path))
+        assert os.path.exists(state.hash_index_path())

@@ -86,7 +86,7 @@ import {
   initDialogHandlers, showLoginDialog, showDirDialog,
   setLoadLibraryFn as setDialogLoadLibraryFn, setInitAppFn,
 } from "./modules/dialog-handlers.js";
-import { initKeyboardShortcuts } from "./modules/keyboard.js";
+import { initKeyboardShortcuts, setKeybindings } from "./modules/keyboard.js";
 import { initTouchHandlers } from "./modules/touch.js";
 import { initCacheUI } from "./modules/cache.js";
 import { initRecentEvents, setRecentCallbacks } from "./modules/recent.js";
@@ -131,6 +131,7 @@ if ("serviceWorker" in navigator) {
 async function initApp() {
   try {
     const cfg = await api("/api/config");
+    if (cfg.keybindings) setKeybindings(cfg.keybindings);
     if (cfg.version) {
       const s = getState();
       s.appTitle = `Folio v${cfg.version}`;

@@ -12,6 +12,7 @@ import { esc } from "./utils.js";
 import { showView } from "./views.js";
 import { openScore, cleanupScore } from "./viewer.js";
 import { CACHE_AVAILABLE, isCached, toggleCache, refreshCacheStatus } from "./cache.js";
+import { healRecentList } from "./recent.js";
 
 // ---------------------------------------------------------------------------
 // Load and render
@@ -40,6 +41,7 @@ export async function loadLibrary() {
     renderTags();
     libraryStatus.textContent = `${data.total} scores`;
     if (CACHE_AVAILABLE) refreshCacheStatus();
+    healRecentList(s.scores);
   } catch (err) {
     libraryStatus.textContent = `Error: ${err.message}`;
   }

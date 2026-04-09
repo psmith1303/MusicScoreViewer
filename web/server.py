@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -28,6 +29,7 @@ from .core import (
     SafeJSON,
     SafeJSONError,
     Score,
+    annotation_sidecar_path,
     build_tagged_filename,
     export_annotated_pdf,
     load_annotations,
@@ -62,9 +64,36 @@ if os.path.isdir(_OLD_CONFIG_DIR) and not os.path.exists(CONFIG_DIR):
 os.makedirs(CONFIG_DIR, exist_ok=True)
 WEB_CONFIG_PATH = os.path.join(CONFIG_DIR, "web_config.json")
 
-DEFAULT_WEB_CONFIG = {
+DEFAULT_KEYBINDINGS = {
+    # Navigation views (work everywhere)
+    "go_library": "Alt+l",
+    "go_setlists": "Alt+s",
+    "go_recent": "Alt+r",
+    "focus_search": "Ctrl+f",
+    "reset_filters": "Ctrl+r",
+    # Viewer tools
+    "tool_nav": "v",
+    "tool_pen": "d",
+    "tool_text": "t",
+    "tool_eraser": "e",
+    "toggle_fullscreen": "f",
+    "add_to_setlist": "s",
+    "edit_tags": "g",
+    "rotate_cw": "r",
+    "rotate_ccw": "Shift+r",
+    "undo": "Ctrl+z",
+    "close_score": "Escape",
+    # Page navigation
+    "next_page": "ArrowRight",
+    "prev_page": "ArrowLeft",
+    "first_page": "Home",
+    "last_page": "End",
+}
+
+DEFAULT_WEB_CONFIG: dict = {
     "last_directory": "",
     "allowed_roots": [],
+    "keybindings": {},
 }
 
 # Max setlist name length; only printable non-path characters allowed
@@ -172,6 +201,7 @@ class AppState:
         path = normalize_path(path)
         self.library_dir = path
         self.scores = scan_library(path)
+        _heal_references(self)
         self.config["last_directory"] = portable_path(path)
         _save_config(self.config)
         log.info(
@@ -182,6 +212,85 @@ class AppState:
         if self.library_dir:
             return os.path.join(self.library_dir, "setlists.json")
         return os.path.join(CONFIG_DIR, "setlists.json")
+
+    def hash_index_path(self) -> str:
+        return os.path.join(self.library_dir, "_hash_index.json")
+
+
+def _heal_references(st: "AppState") -> None:
+    """Compare content hashes against the previous index to detect renames.
+
+    Heals setlist paths and annotation sidecars, then saves the new index.
+    """
+    index_path = st.hash_index_path()
+
+    # Build new index: hash -> portable path
+    new_index: dict[str, str] = {}
+    for s in st.scores:
+        if s.content_hash:
+            new_index[s.content_hash] = portable_path(s.filepath)
+
+    # Load previous index
+    try:
+        old_index = SafeJSON.load(index_path, default={})
+    except SafeJSONError:
+        old_index = {}
+
+    # Detect renames: same hash, different path
+    remap: dict[str, str] = {}
+    new_paths = set(new_index.values())
+    for h, old_path in old_index.items():
+        if h in new_index and new_index[h] != old_path:
+            # Only remap if the old path no longer exists in the library
+            if old_path not in new_paths:
+                remap[old_path] = new_index[h]
+
+    if remap:
+        log.info("Detected %d renamed score(s), healing references", len(remap))
+        _heal_annotation_sidecars(remap)
+        _heal_setlist_paths(st, remap)
+
+    # Save new index
+    try:
+        SafeJSON.save(index_path, new_index)
+    except SafeJSONError as e:
+        log.warning("Could not save hash index: %s", e)
+
+
+def _heal_annotation_sidecars(remap: dict[str, str]) -> None:
+    """Rename annotation sidecar files to follow their PDFs."""
+    for old_path, new_path in remap.items():
+        old_sidecar = annotation_sidecar_path(old_path)
+        if not os.path.exists(old_sidecar):
+            continue
+        new_sidecar = annotation_sidecar_path(new_path)
+        if os.path.exists(new_sidecar):
+            log.warning("Sidecar conflict: both %s and %s exist, skipping",
+                        old_sidecar, new_sidecar)
+            continue
+        try:
+            os.makedirs(os.path.dirname(new_sidecar), exist_ok=True)
+            shutil.move(old_sidecar, new_sidecar)
+            log.info("Moved annotation sidecar: %s -> %s",
+                     old_sidecar, new_sidecar)
+        except OSError as e:
+            log.warning("Failed to move sidecar %s: %s", old_sidecar, e)
+
+
+def _heal_setlist_paths(st: "AppState", remap: dict[str, str]) -> None:
+    """Update setlist song paths that were renamed externally."""
+    data = _load_setlists()
+    changed = False
+    for sl_items in data.values():
+        for item in sl_items:
+            if item.get("type", "song") != "song":
+                continue
+            old = item.get("path", "")
+            if old in remap:
+                item["path"] = remap[old]
+                changed = True
+    if changed:
+        _save_setlists(data)
 
 
 state = AppState()
@@ -222,7 +331,7 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Folio", version="2.4.4",
+    title="Folio", version="2.5.0",
     docs_url=None, redoc_url=None, lifespan=_lifespan,
 )
 
@@ -466,10 +575,13 @@ def _is_allowed_root(path: str) -> bool:
 
 @app.get("/api/config")
 def get_config():
+    user_keys = state.config.get("keybindings", {})
+    keybindings = {**DEFAULT_KEYBINDINGS, **user_keys}
     return {
         "library_dir": portable_path(state.library_dir),
         "score_count": len(state.scores),
         "version": app.version,
+        "keybindings": keybindings,
     }
 
 
@@ -552,6 +664,15 @@ def update_score_tags(req: UpdateTagsRequest):
                     changed = True
         if changed:
             _save_setlists(data)
+
+        # Keep hash index in sync with in-app renames
+        try:
+            idx = SafeJSON.load(state.hash_index_path(), default={})
+            if new_score.content_hash in idx:
+                idx[new_score.content_hash] = new_portable
+                SafeJSON.save(state.hash_index_path(), idx)
+        except SafeJSONError:
+            pass
 
     return {"ok": True, "score": new_score.to_dict()}
 
