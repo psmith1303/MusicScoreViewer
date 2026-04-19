@@ -18,7 +18,10 @@ import { healRecentList } from "./recent.js";
 // Load and render
 // ---------------------------------------------------------------------------
 
+let _loadGen = 0;
+
 export async function loadLibrary() {
+  const gen = ++_loadGen;
   const s = getState();
   const params = new URLSearchParams();
   const q = searchInput.value.trim();
@@ -33,6 +36,7 @@ export async function loadLibrary() {
 
   try {
     const data = await api(`/api/library?${params}`);
+    if (gen !== _loadGen) return;
     s.scores = data.scores;
     s.composers = data.composers;
     s.tags = data.tags;
@@ -43,6 +47,7 @@ export async function loadLibrary() {
     if (CACHE_AVAILABLE) refreshCacheStatus();
     healRecentList(s.scores);
   } catch (err) {
+    if (gen !== _loadGen) return;
     libraryStatus.textContent = `Error: ${err.message}`;
   }
 }
@@ -159,6 +164,7 @@ export function initLibraryEvents() {
   composerFilter.addEventListener("change", loadLibrary);
 
   btnReset.addEventListener("click", async () => {
+    if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
     const s = getState();
     searchInput.value = "";
     composerFilter.value = "";
@@ -166,11 +172,6 @@ export function initLibraryEvents() {
     s.sortCol = "composer";
     s.sortDesc = false;
     updateSortHeaders();
-    try {
-      await api("/api/library/rescan", { method: "POST" });
-    } catch (err) {
-      console.error("Rescan failed:", err);
-    }
     await loadLibrary();
     document.getElementById("library-table-wrap").scrollTop = 0;
   });
