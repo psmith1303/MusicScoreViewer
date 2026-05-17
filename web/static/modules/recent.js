@@ -1,14 +1,13 @@
 // ---------------------------------------------------------------------------
-// Recent files — localStorage persistence, rendering, nav tab handler
+// Recent files — server-persisted, shared across instances
 // ---------------------------------------------------------------------------
 
 import { getState } from "./state.js";
 import { recentBody, recentStatus, btnRecent } from "./dom.js";
+import { api } from "./api.js";
 import { esc } from "./utils.js";
 import { showView } from "./views.js";
-
-const STORAGE_KEY = "folio-recent";
-const MAX_RECENT = 50;
+import { CACHE_AVAILABLE, isCached, toggleCache, refreshCacheStatus } from "./cache.js";
 
 // Callbacks set by app.js to avoid circular deps (viewer <-> recent)
 let _openScore = null;
@@ -19,64 +18,29 @@ export function setRecentCallbacks(openFn, cleanupFn) {
 }
 
 // ---------------------------------------------------------------------------
-// localStorage helpers
+// API
 // ---------------------------------------------------------------------------
 
-function loadRecentList() {
+async function fetchRecent() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+    const data = await api("/api/recent");
+    return data.recent || [];
   } catch {
     return [];
   }
 }
 
-function saveRecentList(list) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-}
-
-export function updateRecentFilepath(oldPath, newPath) {
-  const list = loadRecentList();
-  let changed = false;
-  for (const entry of list) {
-    if (entry.filepath === oldPath) {
-      entry.filepath = newPath;
-      changed = true;
-    }
+export async function addToRecent(score) {
+  if (!score || !score.filepath) return;
+  try {
+    await api("/api/recent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: score.filepath }),
+    });
+  } catch (err) {
+    console.error("Failed to record recent:", err);
   }
-  if (changed) saveRecentList(list);
-}
-
-export function addToRecent(score) {
-  const list = loadRecentList();
-  const filtered = list.filter((e) => e.filepath !== score.filepath);
-  filtered.unshift({
-    filepath: score.filepath,
-    composer: score.composer,
-    title: score.title,
-    content_hash: score.content_hash || "",
-    timestamp: Date.now(),
-  });
-  if (filtered.length > MAX_RECENT) filtered.length = MAX_RECENT;
-  saveRecentList(filtered);
-}
-
-export function healRecentList(scores) {
-  const list = loadRecentList();
-  if (list.length === 0) return;
-  const pathSet = new Set(scores.map((s) => s.filepath));
-  const hashToPath = new Map();
-  for (const s of scores) {
-    if (s.content_hash) hashToPath.set(s.content_hash, s.filepath);
-  }
-  let changed = false;
-  for (const entry of list) {
-    if (pathSet.has(entry.filepath)) continue;
-    if (entry.content_hash && hashToPath.has(entry.content_hash)) {
-      entry.filepath = hashToPath.get(entry.content_hash);
-      changed = true;
-    }
-  }
-  if (changed) saveRecentList(list);
 }
 
 // ---------------------------------------------------------------------------
@@ -102,8 +66,8 @@ function formatRelativeTime(ts) {
 // Rendering
 // ---------------------------------------------------------------------------
 
-export function renderRecent() {
-  const list = loadRecentList();
+export async function renderRecent() {
+  const list = await fetchRecent();
   recentBody.innerHTML = "";
 
   if (list.length === 0) {
@@ -112,13 +76,19 @@ export function renderRecent() {
   }
 
   for (const entry of list) {
+    const tags = entry.tags || [];
     const tr = document.createElement("tr");
+    tr.dataset.filepath = entry.filepath;
+    const cached = isCached(entry.filepath);
     tr.innerHTML = `
       <td title="${esc(entry.composer)}">${esc(entry.composer)}</td>
       <td title="${esc(entry.title)}">${esc(entry.title)}</td>
+      <td title="${esc(tags.join(", "))}">${esc(tags.join(", "))}</td>
       <td>${formatRelativeTime(entry.timestamp)}</td>
+      ${CACHE_AVAILABLE ? `<td class="cache-col"><button class="cache-btn small-btn${cached ? " cached" : ""}" title="${cached ? "Remove from offline cache" : "Download for offline use"}">${cached ? "✓" : "⬇"}</button></td>` : ""}
     `;
-    tr.addEventListener("click", () => {
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest(".cache-btn")) return;
       if (_openScore) {
         _openScore({
           filepath: entry.filepath,
@@ -127,9 +97,17 @@ export function renderRecent() {
         });
       }
     });
+    const cacheBtn = tr.querySelector(".cache-btn");
+    if (cacheBtn) {
+      cacheBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleCache(entry.filepath, e.target);
+      });
+    }
     recentBody.appendChild(tr);
   }
   recentStatus.textContent = `${list.length} recent scores`;
+  if (CACHE_AVAILABLE) refreshCacheStatus(recentBody);
 }
 
 // ---------------------------------------------------------------------------

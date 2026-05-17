@@ -1,7 +1,6 @@
 """Tests for web.server — FastAPI endpoints."""
 
 import os
-import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -999,9 +998,9 @@ class TestHealReferences:
         # Rescan
         state.set_library(str(tmp_path))
 
-        # Check setlist was healed
+        # Check setlist was healed (and migrated to new schema shape)
         data = SafeJSON.load(state.setlist_path(), default={})
-        assert data["My Set"][0]["path"] == portable_path(str(new_pdf))
+        assert data["My Set"]["items"][0]["path"] == portable_path(str(new_pdf))
 
     def test_heal_annotation_sidecar_after_rename(self, tmp_path):
         """Externally renaming a PDF moves its annotation sidecar."""
@@ -1048,3 +1047,299 @@ class TestHealReferences:
         (tmp_path / "score.pdf").write_bytes(b"%PDF-1.4 first")
         state.set_library(str(tmp_path))
         assert os.path.exists(state.hash_index_path())
+
+
+# ---------------------------------------------------------------------------
+# Recent endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestRecent:
+    def test_empty_initially(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.get("/api/recent")
+        assert resp.status_code == 200
+        assert resp.json() == {"recent": []}
+
+    def test_add_and_list(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        score = state.scores[0]
+        resp = client.post("/api/recent", json={"path": score.filepath})
+        assert resp.status_code == 200
+        data = client.get("/api/recent").json()["recent"]
+        assert len(data) == 1
+        assert data[0]["composer"] == score.composer
+        assert data[0]["title"] == score.title
+        assert data[0]["content_hash"] == score.content_hash
+
+    def test_add_dedupes_and_promotes(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        a, b = state.scores[0], state.scores[1]
+        client.post("/api/recent", json={"path": a.filepath})
+        client.post("/api/recent", json={"path": b.filepath})
+        client.post("/api/recent", json={"path": a.filepath})
+        data = client.get("/api/recent").json()["recent"]
+        assert len(data) == 2
+        assert data[0]["title"] == a.title  # most recent first
+
+    def test_add_caps_at_max(self, client, library_with_pdfs, monkeypatch):
+        monkeypatch.setattr(srv, "MAX_RECENT", 2)
+        state.set_library(library_with_pdfs)
+        for s in state.scores[:3]:
+            client.post("/api/recent", json={"path": s.filepath})
+        data = client.get("/api/recent").json()["recent"]
+        assert len(data) == 2
+
+    def test_unknown_path_returns_404(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.post(
+            "/api/recent",
+            json={"path": os.path.join(library_with_pdfs, "nope.pdf")},
+        )
+        assert resp.status_code == 404
+
+    def test_traversal_blocked(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.post("/api/recent", json={"path": "/etc/passwd"})
+        assert resp.status_code in (400, 403, 404)
+
+    def test_clear(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/recent", json={"path": state.scores[0].filepath})
+        resp = client.delete("/api/recent")
+        assert resp.status_code == 200
+        assert client.get("/api/recent").json() == {"recent": []}
+
+    def test_heals_on_rename_via_api(self, client, library_with_pdfs):
+        """Renaming via /api/scores/tags updates the recent entry's filepath."""
+        state.set_library(library_with_pdfs)
+        score = state.scores[0]
+        client.post("/api/recent", json={"path": score.filepath})
+        resp = client.put(
+            "/api/scores/tags",
+            json={"path": score.filepath, "filename_tags": ["renamed"]},
+        )
+        assert resp.status_code == 200
+        new_path = resp.json()["score"]["filepath"]
+        data = client.get("/api/recent").json()["recent"]
+        assert len(data) == 1
+        assert data[0]["filepath"].endswith(os.path.basename(new_path))
+
+    def test_persists_across_set_library(self, client, library_with_pdfs):
+        """Recent entries survive a rescan."""
+        state.set_library(library_with_pdfs)
+        client.post("/api/recent", json={"path": state.scores[0].filepath})
+        state.set_library(library_with_pdfs)
+        data = client.get("/api/recent").json()["recent"]
+        assert len(data) == 1
+
+    def test_includes_current_tags(self, client, library_with_pdfs):
+        """Recent entries are enriched with the score's live tags."""
+        state.set_library(library_with_pdfs)
+        tagged = next(s for s in state.scores if s.tags)
+        client.post("/api/recent", json={"path": tagged.filepath})
+        data = client.get("/api/recent").json()["recent"]
+        assert data[0]["tags"] == sorted(tagged.tags)
+
+    def test_tags_reflect_rename(self, client, library_with_pdfs):
+        """Retagging a score updates the tags surfaced by /api/recent."""
+        state.set_library(library_with_pdfs)
+        score = state.scores[0]
+        client.post("/api/recent", json={"path": score.filepath})
+        client.put(
+            "/api/scores/tags",
+            json={"path": score.filepath, "filename_tags": ["fresh"]},
+        )
+        data = client.get("/api/recent").json()["recent"]
+        assert data[0]["tags"] == ["fresh"]
+
+    def test_missing_score_gets_empty_tags(self, client, library_with_pdfs):
+        """Entries no longer in the library still list with empty tags."""
+        state.set_library(library_with_pdfs)
+        score = state.scores[0]
+        client.post("/api/recent", json={"path": score.filepath})
+        os.remove(score.filepath)
+        state.set_library(library_with_pdfs)
+        data = client.get("/api/recent").json()["recent"]
+        assert len(data) == 1
+        assert data[0]["tags"] == []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/newest
+# ---------------------------------------------------------------------------
+
+
+class TestNewest:
+    def test_empty_library(self, client):
+        resp = client.get("/api/newest")
+        assert resp.status_code == 200
+        assert resp.json() == {"scores": [], "total": 0}
+
+    def test_orders_by_mtime_desc(self, client, library_with_pdfs):
+        # Stamp distinct mtimes before scanning so order is deterministic.
+        import os as _os
+        names = [
+            "Bach - Cello Suite.pdf",
+            "Mozart - Sonata.pdf",
+            _os.path.join("jazz", "Davis - Blue -- swing.pdf"),
+        ]
+        for i, name in enumerate(names):
+            ts = 1_000_000 + i * 1000
+            _os.utime(_os.path.join(library_with_pdfs, name), (ts, ts))
+        state.set_library(library_with_pdfs)
+
+        scores = client.get("/api/newest").json()["scores"]
+        titles = [s["title"] for s in scores]
+        assert titles == ["Blue", "Sonata", "Cello Suite"]
+
+    def test_includes_tags_and_mtime(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        scores = client.get("/api/newest").json()["scores"]
+        swing = next(s for s in scores if s["title"] == "Blue")
+        assert swing["tags"] == ["jazz", "swing"]  # folder + filename tag
+        assert swing["mtime"] > 0
+
+    def test_limit_clamped_and_applied(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        data = client.get("/api/newest?limit=2").json()
+        assert data["total"] == 2
+        assert len(data["scores"]) == 2
+        # Out-of-range limits are rejected by validation.
+        assert client.get("/api/newest?limit=0").status_code == 422
+        assert client.get("/api/newest?limit=999").status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Shuffle setlists
+# ---------------------------------------------------------------------------
+
+
+class TestShuffleSetlist:
+    def test_new_setlist_shuffle_false(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "S"})
+        resp = client.get("/api/setlists/S")
+        assert resp.json()["shuffle"] is False
+
+    def test_set_shuffle_true(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "S"})
+        resp = client.post("/api/setlists/S/shuffle", json={"shuffle": True})
+        assert resp.status_code == 200
+        assert resp.json()["shuffle"] is True
+        assert client.get("/api/setlists/S").json()["shuffle"] is True
+
+    def test_shuffle_included_in_listing(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "A"})
+        client.post("/api/setlists/A/shuffle", json={"shuffle": True})
+        client.post("/api/setlists", json={"name": "B"})
+        data = {sl["name"]: sl for sl in client.get("/api/setlists").json()["setlists"]}
+        assert data["A"]["shuffle"] is True
+        assert data["B"]["shuffle"] is False
+
+    def test_shuffle_setlist_returns_404(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        resp = client.post("/api/setlists/Nope/shuffle", json={"shuffle": True})
+        assert resp.status_code == 404
+
+    def test_playback_no_shuffle_is_stable(self, client, library_with_pdfs):
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "S"})
+        items = [_song(f"T{i}") for i in range(8)]
+        client.put("/api/setlists/S", json={"items": items})
+        a = client.get("/api/setlists/S/playback").json()["songs"]
+        b = client.get("/api/setlists/S/playback").json()["songs"]
+        assert [s["title"] for s in a] == [s["title"] for s in b]
+
+    def test_playback_with_shuffle_permutes(self, client, library_with_pdfs):
+        """With shuffle=True, multiple calls eventually produce different orders."""
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "S"})
+        items = [_song(f"T{i}") for i in range(8)]
+        client.put("/api/setlists/S", json={"items": items})
+        client.post("/api/setlists/S/shuffle", json={"shuffle": True})
+        baseline = [s["title"] for s in
+                    client.get("/api/setlists/S/playback").json()["songs"]]
+        # Same elements every time
+        for _ in range(20):
+            got = [s["title"] for s in
+                   client.get("/api/setlists/S/playback").json()["songs"]]
+            assert sorted(got) == sorted(baseline)
+        # At least one of many calls must differ
+        diffs = 0
+        for _ in range(20):
+            got = [s["title"] for s in
+                   client.get("/api/setlists/S/playback").json()["songs"]]
+            if got != baseline:
+                diffs += 1
+        assert diffs > 0
+
+    def test_playback_nested_shuffle_within_shuffled_parent(
+        self, client, library_with_pdfs,
+    ):
+        """When parent is shuffled and child ref is also shuffled, both shuffle."""
+        state.set_library(library_with_pdfs)
+        # Child setlist with 4 songs, shuffle=on
+        client.post("/api/setlists", json={"name": "Child"})
+        client.put(
+            "/api/setlists/Child",
+            json={"items": [_song(f"C{i}") for i in range(4)]},
+        )
+        client.post("/api/setlists/Child/shuffle", json={"shuffle": True})
+        # Parent with [ref to Child, P0, P1], shuffle=on
+        client.post("/api/setlists", json={"name": "Parent"})
+        client.put(
+            "/api/setlists/Parent",
+            json={"items": [_ref("Child"), _song("P0"), _song("P1")]},
+        )
+        client.post("/api/setlists/Parent/shuffle", json={"shuffle": True})
+        for _ in range(10):
+            songs = client.get("/api/setlists/Parent/playback").json()["songs"]
+            titles = [s["title"] for s in songs]
+            assert sorted(titles) == sorted(["C0", "C1", "C2", "C3", "P0", "P1"])
+
+    def test_playback_nested_ref_unshuffled_keeps_order(
+        self, client, library_with_pdfs,
+    ):
+        """A ref to a non-shuffled child must play its songs in order."""
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "Child"})
+        client.put(
+            "/api/setlists/Child",
+            json={"items": [_song(f"C{i}") for i in range(4)]},
+        )
+        # Child shuffle stays False
+        client.post("/api/setlists", json={"name": "Parent"})
+        client.put("/api/setlists/Parent", json={"items": [_ref("Child")]})
+        # Parent shuffle stays False too
+        songs = client.get("/api/setlists/Parent/playback").json()["songs"]
+        assert [s["title"] for s in songs] == ["C0", "C1", "C2", "C3"]
+
+    def test_flat_endpoint_unaffected_by_shuffle(self, client, library_with_pdfs):
+        """/flat stays deterministic even when shuffle=True (used by Cache)."""
+        state.set_library(library_with_pdfs)
+        client.post("/api/setlists", json={"name": "S"})
+        items = [_song(f"T{i}") for i in range(8)]
+        client.put("/api/setlists/S", json={"items": items})
+        client.post("/api/setlists/S/shuffle", json={"shuffle": True})
+        a = client.get("/api/setlists/S/flat").json()["songs"]
+        b = client.get("/api/setlists/S/flat").json()["songs"]
+        assert [s["title"] for s in a] == [s["title"] for s in b] == [
+            f"T{i}" for i in range(8)
+        ]
+
+    def test_legacy_list_shape_loads(self, client, library_with_pdfs):
+        """A setlist saved in the old list-of-items shape loads transparently."""
+        state.set_library(library_with_pdfs)
+        from web.core import SafeJSON
+        SafeJSON.save(
+            state.setlist_path(),
+            {"Old": [_song("X")]},  # old shape on disk
+        )
+        resp = client.get("/api/setlists/Old")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["shuffle"] is False
+        assert len(body["items"]) == 1

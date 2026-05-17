@@ -165,6 +165,7 @@ class Score:
     folder_tags: set[str] = field(default_factory=set)
     filename_tags: set[str] = field(default_factory=set)
     content_hash: str = ""
+    mtime: float = 0.0
 
     @property
     def tags(self) -> set[str]:
@@ -179,6 +180,7 @@ class Score:
         self.folder_tags = set()
         self.filename_tags = set()
         self.content_hash = ""
+        self.mtime = 0.0
         if folder_tags:
             self.folder_tags.update(t.lower() for t in folder_tags if t)
         self._parse()
@@ -212,6 +214,7 @@ class Score:
             "folder_tags": sorted(self.folder_tags),
             "filename_tags": sorted(self.filename_tags),
             "content_hash": self.content_hash,
+            "mtime": self.mtime,
         }
 
 
@@ -336,6 +339,9 @@ def scan_library(
                 st = entry.stat()
             except OSError:
                 st = None
+
+            if st is not None:
+                score.mtime = st.st_mtime
 
             pkey = portable_path(entry.path)
             cached_hash = ""

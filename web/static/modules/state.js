@@ -37,6 +37,7 @@ const state = {
   undoStacks: {},
   annotationEtag: null,
   pendingTextAnnot: null,
+  draggingAnnot: null,
 
   // Setlists
   setlistPlayback: null,
@@ -74,6 +75,7 @@ export function resetViewerState() {
   state.setlistPlayback = null;
   state.currentStroke = [];
   state.pendingTextAnnot = null;
+  state.draggingAnnot = null;
   state.cachedPages.clear();
 }
 

@@ -5,8 +5,9 @@
 import { getState } from "./state.js";
 import {
   setlistBody, setlistStatus, setlistDetailActions, setlistDetailName,
-  setlistSongsBody, btnNewSetlist, btnRenameSetlist, btnAddSong,
-  btnPlaySetlist, btnAddSetlistRef, btnCacheSetlist,
+  setlistSongsBody, btnNewSetlist, btnRenameSetlist, btnDeleteSetlist,
+  btnAddSong, btnPlaySetlist, btnAddSetlistRef, btnCacheSetlist,
+  btnToggleShuffle,
   setlistNameDialog, setlistNameDialogTitle, setlistNameInput, setlistNameCancel,
   songPickerDialog, songSearch, songPickerList, songStart, songEnd,
   songPickerCancel, songPickerAdd,
@@ -48,8 +49,11 @@ function renderSetlistList(setlists) {
     const countLabel = sl.count === sl.flat_count
       ? `${sl.count}`
       : `${sl.count} (${sl.flat_count} songs)`;
+    const shuffleMark = sl.shuffle
+      ? ` <span class="shuffle-mark" title="Plays in random order">&#x21C4;</span>`
+      : "";
     tr.innerHTML = `
-      <td>${esc(sl.name)}</td>
+      <td>${esc(sl.name)}${shuffleMark}</td>
       <td>${countLabel}</td>
       <td class="setlist-actions">
         <button class="small-btn del-btn" title="Delete">&#10005;</button>
@@ -60,19 +64,30 @@ function renderSetlistList(setlists) {
       openSetlistDetail(sl.name);
     });
     tr.addEventListener("dblclick", () => startSetlistPlayback(sl.name));
-    tr.querySelector(".del-btn").addEventListener("click", async (e) => {
+    tr.querySelector(".del-btn").addEventListener("click", (e) => {
       e.stopPropagation();
-      if (!confirm(`Delete setlist "${sl.name}"?`)) return;
-      await api(`/api/setlists/${encodeURIComponent(sl.name)}`, { method: "DELETE" });
-      if (s.editingSetlistName === sl.name) {
-        s.editingSetlistName = null;
-        s.editingSetlistItems = [];
-        renderSetlistDetail();
-      }
-      loadSetlists();
+      deleteSetlist(sl.name);
     });
     setlistBody.appendChild(tr);
   }
+}
+
+async function deleteSetlist(name) {
+  if (!confirm(`Delete setlist "${name}"?`)) return;
+  try {
+    await api(`/api/setlists/${encodeURIComponent(name)}`, { method: "DELETE" });
+  } catch (err) {
+    console.error("Failed to delete setlist:", err);
+    return;
+  }
+  const s = getState();
+  if (s.editingSetlistName === name) {
+    s.editingSetlistName = null;
+    s.editingSetlistItems = [];
+    s.editingSetlistShuffle = false;
+    renderSetlistDetail();
+  }
+  loadSetlists();
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +100,7 @@ export async function openSetlistDetail(name) {
     const data = await api(`/api/setlists/${encodeURIComponent(name)}`);
     s.editingSetlistName = data.name;
     s.editingSetlistItems = data.items || [];
+    s.editingSetlistShuffle = !!data.shuffle;
     renderSetlistDetail();
     setlistBody.querySelectorAll("tr").forEach((row) => {
       row.classList.toggle("selected-setlist",
@@ -107,6 +123,10 @@ function renderSetlistDetail() {
 
   setlistDetailName.textContent = s.editingSetlistName;
   setlistDetailActions.classList.remove("hidden");
+  btnToggleShuffle.classList.toggle("active", s.editingSetlistShuffle);
+  btnToggleShuffle.setAttribute(
+    "aria-pressed", s.editingSetlistShuffle ? "true" : "false",
+  );
 
   let dragSrcIndex = null;
 
@@ -236,7 +256,7 @@ async function saveSetlistItems() {
 export async function startSetlistPlayback(name) {
   const s = getState();
   try {
-    const data = await api(`/api/setlists/${encodeURIComponent(name)}/flat`);
+    const data = await api(`/api/setlists/${encodeURIComponent(name)}/playback`);
     if (data.songs.length === 0) return;
     s.returnView = s.currentView;
     s.setlistPlayback = { name, songs: data.songs, index: 0 };
@@ -326,6 +346,33 @@ export function initSetlistEvents() {
     setlistNameInput.value = "";
     setlistNameDialog.showModal();
     setlistNameInput.focus();
+  });
+
+  // Delete current setlist (from detail toolbar)
+  btnDeleteSetlist.addEventListener("click", () => {
+    if (!s.editingSetlistName) return;
+    deleteSetlist(s.editingSetlistName);
+  });
+
+  // Toggle shuffle on/off for current setlist
+  btnToggleShuffle.addEventListener("click", async () => {
+    if (!s.editingSetlistName) return;
+    const next = !s.editingSetlistShuffle;
+    try {
+      const resp = await api(
+        `/api/setlists/${encodeURIComponent(s.editingSetlistName)}/shuffle`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shuffle: next }),
+        },
+      );
+      s.editingSetlistShuffle = !!resp.shuffle;
+      renderSetlistDetail();
+      loadSetlists();
+    } catch (err) {
+      console.error("Failed to toggle shuffle:", err);
+    }
   });
 
   // Rename setlist

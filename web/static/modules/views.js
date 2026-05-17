@@ -4,8 +4,8 @@
 
 import { getState } from "./state.js";
 import {
-  libraryView, setlistView, recentView, viewerView,
-  btnLibrary, btnSetlists, btnRecent, titleDisplay, pdfContainer,
+  libraryView, setlistView, recentView, newestView, viewerView,
+  btnLibrary, btnSetlists, btnRecent, btnNewest, titleDisplay, pdfContainer,
 } from "./dom.js";
 
 export function showView(view) {
@@ -15,11 +15,13 @@ export function showView(view) {
   libraryView.classList.add("hidden");
   setlistView.classList.add("hidden");
   recentView.classList.add("hidden");
+  newestView.classList.add("hidden");
   viewerView.classList.add("hidden");
 
   btnLibrary.classList.remove("active");
   btnSetlists.classList.remove("active");
   btnRecent.classList.remove("active");
+  btnNewest.classList.remove("active");
 
   switch (view) {
     case "library":
@@ -35,6 +37,11 @@ export function showView(view) {
     case "recent":
       recentView.classList.remove("hidden");
       btnRecent.classList.add("active");
+      titleDisplay.textContent = s.appTitle;
+      break;
+    case "newest":
+      newestView.classList.remove("hidden");
+      btnNewest.classList.add("active");
       titleDisplay.textContent = s.appTitle;
       break;
     case "viewer":

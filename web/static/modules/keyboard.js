@@ -7,7 +7,7 @@ import {
   textDialog, dirDialog, setlistNameDialog, songPickerDialog,
   setlistPickerDialog, setlistRefPickerDialog, loginDialog,
   conflictDialog, offlineDialog,
-  btnLibrary, btnSetlists, btnRecent, btnReset, searchInput,
+  btnLibrary, btnSetlists, btnRecent, btnNewest, btnReset, searchInput,
 } from "./dom.js";
 import { setTool, doUndo } from "./annotations.js";
 import {
@@ -96,6 +96,11 @@ function handleGlobalShortcuts(e) {
     btnRecent.click();
     return true;
   }
+  if (matches(e, "go_newest")) {
+    e.preventDefault();
+    btnNewest.click();
+    return true;
+  }
   if (matches(e, "focus_search")) {
     e.preventDefault();
     searchInput.focus();
@@ -118,6 +123,7 @@ function handleViewerShortcuts(e) {
   if (matches(e, "tool_pen")) { setTool("pen"); return true; }
   if (matches(e, "tool_text")) { setTool("text"); return true; }
   if (matches(e, "tool_eraser")) { setTool("eraser"); return true; }
+  if (matches(e, "tool_move")) { setTool("move"); return true; }
   if (matches(e, "toggle_fullscreen")) { toggleFullscreen(); return true; }
   if (matches(e, "add_to_setlist")) { showSetlistPicker(); return true; }
   if (matches(e, "edit_tags")) { showTagEditor(); return true; }

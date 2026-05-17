@@ -252,6 +252,23 @@ th.sortable:hover {
   font-size: 12px;
   color: var(--fg-dim);
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--fg-dim);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ================================================================== */
@@ -305,6 +322,69 @@ th.sortable:hover {
 }
 
 #recent-status {
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+
+/* ================================================================== */
+/* Newest view (shares recent-table layout)                           */
+/* ================================================================== */
+
+#newest-view {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 40px);
+}
+
+#newest-table-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px;
+}
+
+#newest-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#newest-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+#newest-table th {
+  background: var(--toolbar-bg);
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+}
+
+#newest-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--bg-panel);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 400px;
+}
+
+#newest-table tbody tr {
+  cursor: pointer;
+}
+
+#newest-table tbody tr:nth-child(even) {
+  background: var(--row-stripe);
+}
+
+#newest-table tbody tr:hover {
+  background: var(--row-hover);
+}
+
+#newest-status {
   padding: 4px 12px;
   font-size: 12px;
   color: var(--fg-dim);
@@ -406,6 +486,7 @@ th.sortable:hover {
 .annot-layer.tool-pen { cursor: crosshair; }
 .annot-layer.tool-text { cursor: text; }
 .annot-layer.tool-eraser { cursor: pointer; }
+.annot-layer.tool-move { cursor: move; }
 
 /* ================================================================== */
 /* Setlist views                                                      */
@@ -540,6 +621,18 @@ th.sortable:hover {
   display: flex;
   gap: 4px;
   justify-content: flex-end;
+}
+
+#btn-toggle-shuffle.active {
+  background: var(--accent, #4a90e2);
+  color: #fff;
+  border-color: var(--accent, #4a90e2);
+}
+
+.shuffle-mark {
+  margin-left: 6px;
+  color: var(--accent, #4a90e2);
+  font-weight: bold;
 }
 
 .page-input {
@@ -741,7 +834,7 @@ dialog p {
     padding-top: env(safe-area-inset-top);
     height: calc(40px + env(safe-area-inset-top));
   }
-  #library-view, #setlist-view, #recent-view, #viewer {
+  #library-view, #setlist-view, #recent-view, #newest-view, #viewer {
     height: calc(100dvh - 40px - env(safe-area-inset-top));
   }
   #viewer.pseudo-fullscreen {

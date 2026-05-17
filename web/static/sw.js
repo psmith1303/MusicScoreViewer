@@ -1,4 +1,8 @@
-const SHELL_CACHE = "folio-v25";
+// Single source of truth for the shell build. Keep this in lockstep with
+// the FastAPI `version=` in web/server.py — the client compares the two to
+// detect (and self-heal) a stale service-worker shell.
+const APP_VERSION = "2.7.0";
+const SHELL_CACHE = "folio-v" + APP_VERSION;
 const PDF_CACHE = "folio-pdfs-v1";
 const MAX_AUTO_CACHED = 30;
 
@@ -21,6 +25,7 @@ const SHELL_URLS = [
   "/modules/touch.js",
   "/modules/cache.js",
   "/modules/recent.js",
+  "/modules/newest.js",
   "/lib/pdfjs/build/pdf.min.mjs",
   "/lib/pdfjs/build/pdf.worker.min.mjs",
   "/manifest.json",
@@ -155,6 +160,14 @@ self.addEventListener("activate", (e) => {
     )
   );
   self.clients.claim();
+});
+
+// Lets the page query the running shell's build version so it can detect a
+// stale client and force an update.
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "GET_VERSION" && e.ports[0]) {
+    e.ports[0].postMessage({ version: APP_VERSION });
+  }
 });
 
 // ---------------------------------------------------------------------------

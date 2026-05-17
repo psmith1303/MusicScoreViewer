@@ -18,6 +18,7 @@ export const btnOffline = $("#btn-offline");
 export const btnLibrary = $("#btn-library");
 export const btnSetlists = $("#btn-setlists");
 export const btnRecent = $("#btn-recent");
+export const btnNewest = $("#btn-newest");
 export const btnSetDir = $("#btn-set-dir");
 export const titleDisplay = $("#title-display");
 export const btnTheme = $("#btn-theme");
@@ -26,6 +27,11 @@ export const btnTheme = $("#btn-theme");
 export const recentView = $("#recent-view");
 export const recentBody = $("#recent-body");
 export const recentStatus = $("#recent-status");
+
+// Newest view
+export const newestView = $("#newest-view");
+export const newestBody = $("#newest-body");
+export const newestStatus = $("#newest-status");
 
 // Viewer
 export const viewerView = $("#viewer");
@@ -53,6 +59,7 @@ export const btnNav = $("#btn-nav");
 export const btnPen = $("#btn-pen");
 export const btnText = $("#btn-text");
 export const btnEraser = $("#btn-eraser");
+export const btnMove = $("#btn-move");
 export const btnClearPage = $("#btn-clear-page");
 export const btnPencilOnly = $("#btn-pencil-only");
 export const btnUndo = $("#btn-undo");

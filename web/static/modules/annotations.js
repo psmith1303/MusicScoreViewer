@@ -5,7 +5,7 @@
 import { getState } from "./state.js";
 import {
   annotCanvas1, annotCanvas2, sizeSlider,
-  btnNav, btnPen, btnText, btnEraser, btnPencilOnly, btnUndo,
+  btnNav, btnPen, btnText, btnEraser, btnMove, btnPencilOnly, btnUndo,
   btnRotCCW, btnRotCW,
 } from "./dom.js";
 import { api } from "./api.js";
@@ -93,11 +93,11 @@ export function setTool(tool) {
   const s = getState();
   s.activeTool = tool;
   document.querySelectorAll(".tool-btn").forEach((b) => b.classList.remove("active"));
-  const map = { nav: btnNav, pen: btnPen, text: btnText, eraser: btnEraser };
+  const map = { nav: btnNav, pen: btnPen, text: btnText, eraser: btnEraser, move: btnMove };
   if (map[tool]) map[tool].classList.add("active");
 
   for (const ac of [annotCanvas1, annotCanvas2]) {
-    ac.classList.remove("tool-pen", "tool-text", "tool-eraser");
+    ac.classList.remove("tool-pen", "tool-text", "tool-eraser", "tool-move");
     if (tool !== "nav") ac.classList.add(`tool-${tool}`);
     ac.style.touchAction = tool === "nav" ? "auto" : "none";
   }
@@ -287,6 +287,10 @@ function onPointerDown(e, annotCanvas, layoutIndex) {
   } else if (s.activeTool === "eraser") {
     eraseAt(e, annotCanvas, layoutIndex);
     annotCanvas.setPointerCapture(e.pointerId);
+  } else if (s.activeTool === "move") {
+    if (startMove(e, annotCanvas, layoutIndex)) {
+      annotCanvas.setPointerCapture(e.pointerId);
+    }
   } else if (s.activeTool === "text") {
     handleTextClick(e, annotCanvas, layoutIndex);
   }
@@ -314,6 +318,9 @@ function onPointerMove(e, annotCanvas, layoutIndex) {
   } else if (s.activeTool === "eraser" && e.buttons > 0) {
     e.preventDefault();
     eraseAt(e, annotCanvas, layoutIndex);
+  } else if (s.activeTool === "move" && s.draggingAnnot) {
+    e.preventDefault();
+    moveTo(e, annotCanvas);
   }
 }
 
@@ -343,6 +350,8 @@ function onPointerUp(e, annotCanvas, layoutIndex) {
     });
     saveAnnotations();
     drawAnnotations();
+  } else if (s.activeTool === "move" && s.draggingAnnot) {
+    endMove();
   }
   s.currentStroke = [];
 }
@@ -390,6 +399,95 @@ function hitTest(annot, px, py, w, h, rot, halo) {
     return Math.abs(cx - px) < textHalo && Math.abs(cy - py) < textHalo;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Move tool — drag a single annotation within its page
+// ---------------------------------------------------------------------------
+
+// Returns true if an annotation was grabbed (so the caller captures the
+// pointer); false if the press landed on empty space.
+function startMove(e, annotCanvas, layoutIndex) {
+  const s = getState();
+  const layout = s.pageLayouts[layoutIndex];
+  if (!layout) return false;
+
+  const pg = String(layout.page - 1);
+  const pageAnnots = s.annotations[pg];
+  if (!pageAnnots || pageAnnots.length === 0) return false;
+
+  const { x, y } = canvasCoords(e, annotCanvas);
+  const rot = (s.rotations[pg] || 0) % 360;
+  const halo = 20;
+
+  let target = null;
+  for (let i = pageAnnots.length - 1; i >= 0; i--) {
+    if (hitTest(pageAnnots[i], x, y, layout.cssW, layout.cssH, rot, halo)) {
+      target = pageAnnots[i];
+      break;
+    }
+  }
+  if (!target) return false;
+
+  // Grab point and the annotation's geometry, both in stored page space,
+  // so deltas survive rotation (the rotation offsets cancel in subtraction).
+  const [grabX, grabY] = inverseTransformPt(
+    x / layout.cssW, y / layout.cssH, rot,
+  );
+  const orig = target.type === "ink"
+    ? target.points.map(([px, py]) => [px, py])
+    : { x: target.x, y: target.y };
+
+  s.draggingAnnot = {
+    pg,
+    uuid: target.uuid,
+    grabX,
+    grabY,
+    rot,
+    cssW: layout.cssW,
+    cssH: layout.cssH,
+    orig,
+    moved: false,
+  };
+  return true;
+}
+
+function moveTo(e, annotCanvas) {
+  const s = getState();
+  const d = s.draggingAnnot;
+  if (!d) return;
+
+  const pageAnnots = s.annotations[d.pg] || [];
+  const annot = pageAnnots.find((a) => a.uuid === d.uuid);
+  if (!annot) return;
+
+  const { x, y } = canvasCoords(e, annotCanvas);
+  const [curX, curY] = inverseTransformPt(x / d.cssW, y / d.cssH, d.rot);
+  const dx = curX - d.grabX;
+  const dy = curY - d.grabY;
+
+  // Snapshot for undo only once an actual drag begins, so a stray tap on
+  // an annotation doesn't pollute the undo stack.
+  if (!d.moved) {
+    pushUndo(d.pg);
+    d.moved = true;
+  }
+
+  if (annot.type === "ink") {
+    annot.points = d.orig.map(([ox, oy]) => [ox + dx, oy + dy]);
+  } else if (annot.type === "text") {
+    annot.x = d.orig.x + dx;
+    annot.y = d.orig.y + dy;
+  }
+  drawAnnotations();
+}
+
+function endMove() {
+  const s = getState();
+  const d = s.draggingAnnot;
+  s.draggingAnnot = null;
+  if (d && d.moved) saveAnnotations();
+  drawAnnotations();
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +584,7 @@ export function initAnnotationEvents() {
   btnPen.addEventListener("click", () => setTool("pen"));
   btnText.addEventListener("click", () => setTool("text"));
   btnEraser.addEventListener("click", () => setTool("eraser"));
+  btnMove.addEventListener("click", () => setTool("move"));
 
   // Pencil-only toggle — restored from localStorage so iPad users don't
   // re-enable on every reload.

@@ -90,12 +90,14 @@ import { initKeyboardShortcuts, setKeybindings } from "./modules/keyboard.js";
 import { initTouchHandlers } from "./modules/touch.js";
 import { initCacheUI } from "./modules/cache.js";
 import { initRecentEvents, setRecentCallbacks } from "./modules/recent.js";
+import { initNewestEvents, setNewestCallbacks } from "./modules/newest.js";
 
 // Wire cross-module callbacks to break circular dependencies
 setLoadLibraryFn(loadLibrary);
 setDialogLoadLibraryFn(loadLibrary);
 setLoadSetlistsFn(loadSetlists);
 setRecentCallbacks(openScore, cleanupScore);
+setNewestCallbacks(openScore, cleanupScore);
 
 // Surface any unhandled async failure as a viewer toast — keeps the user in
 // the viewer instead of letting silent errors corrupt later interactions.
@@ -123,12 +125,10 @@ initKeyboardShortcuts();
 initTouchHandlers();
 initCacheUI();
 initRecentEvents();
+initNewestEvents();
 
 // Service worker
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch((err) => {
-    console.warn("SW registration failed:", err);
-  });
   // Auto-reload when a new SW takes control (ensures fresh shell + data)
   let reloading = false;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
@@ -137,6 +137,76 @@ if ("serviceWorker" in navigator) {
       window.location.reload();
     }
   });
+
+  navigator.serviceWorker.register("/sw.js").then((reg) => {
+    // Force an immediate update check instead of waiting for the browser's
+    // lazy heuristic (navigation-in-scope / ~24h). This is what actually
+    // prevents stale shells: a bumped sw.js installs, skipWaiting fires,
+    // and the controllerchange handler above reloads into the new build.
+    const checkForUpdate = () => reg.update().catch(() => {});
+    checkForUpdate();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkForUpdate();
+    });
+  }).catch((err) => {
+    console.warn("SW registration failed:", err);
+  });
+}
+
+// Ask the controlling service worker which build it's serving. Returns null
+// if there's no controller yet (first install) or it doesn't answer.
+function getServiceWorkerVersion() {
+  const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+  if (!sw) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const ch = new MessageChannel();
+    const timer = setTimeout(() => resolve(null), 1500);
+    ch.port1.onmessage = (e) => {
+      clearTimeout(timer);
+      resolve((e.data && e.data.version) || null);
+    };
+    try {
+      sw.postMessage({ type: "GET_VERSION" }, [ch.port2]);
+    } catch (_) {
+      clearTimeout(timer);
+      resolve(null);
+    }
+  });
+}
+
+// If the running shell is older than what the server now serves, force the
+// SW to update. The controllerchange handler reloads once it takes over;
+// the timed fallback covers the case where that never fires, guarded by
+// sessionStorage so we reload at most once per server version (no loop).
+async function reloadIfShellStale(serverVersion) {
+  if (!serverVersion || !("serviceWorker" in navigator)) return;
+  const swVersion = await getServiceWorkerVersion();
+  if (!swVersion || swVersion === serverVersion) return;
+
+  console.warn(
+    `Stale shell: running ${swVersion}, server is ${serverVersion} — updating`,
+  );
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg) reg.update().catch(() => {});
+  } catch (_) {
+    // getRegistration can reject in some privacy modes; fall through.
+  }
+
+  let alreadyTried = null;
+  try {
+    alreadyTried = sessionStorage.getItem("folio.staleReload");
+  } catch (_) {
+    // sessionStorage unavailable (private mode) — skip the loop guard;
+    // the controllerchange path is still in play.
+  }
+  if (alreadyTried === serverVersion) return;
+  try {
+    sessionStorage.setItem("folio.staleReload", serverVersion);
+  } catch (_) {
+    // ignore
+  }
+  setTimeout(() => window.location.reload(), 3000);
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +221,7 @@ async function initApp() {
       const s = getState();
       s.appTitle = `Folio v${cfg.version}`;
       titleDisplay.textContent = s.appTitle;
+      reloadIfShellStale(cfg.version);
     }
     if (cfg.library_dir && cfg.score_count > 0) {
       dirInput.value = cfg.library_dir;

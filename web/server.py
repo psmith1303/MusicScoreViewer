@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import logging
 import os
+import random
 import re
 import secrets
 import shutil
@@ -22,7 +23,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 
 from .core import (
     AnnotationConflictError,
@@ -30,7 +31,6 @@ from .core import (
     SafeJSONError,
     Score,
     annotation_sidecar_path,
-    build_tagged_filename,
     export_annotated_pdf,
     load_annotations,
     normalize_path,
@@ -69,6 +69,7 @@ DEFAULT_KEYBINDINGS = {
     "go_library": "Alt+l",
     "go_setlists": "Alt+s",
     "go_recent": "Alt+r",
+    "go_newest": "Alt+n",
     "focus_search": "Ctrl+f",
     "reset_filters": "Ctrl+r",
     # Viewer tools
@@ -76,6 +77,7 @@ DEFAULT_KEYBINDINGS = {
     "tool_pen": "d",
     "tool_text": "t",
     "tool_eraser": "e",
+    "tool_move": "m",
     "toggle_fullscreen": "f",
     "add_to_setlist": "s",
     "edit_tags": "g",
@@ -200,7 +202,19 @@ class AppState:
     def set_library(self, path: str) -> None:
         path = normalize_path(path)
         self.library_dir = path
-        self.scores = scan_library(path)
+        cache_path = self.scan_cache_path()
+        try:
+            hash_cache = SafeJSON.load(cache_path, default={})
+            if not isinstance(hash_cache, dict):
+                hash_cache = {}
+        except SafeJSONError as e:
+            log.warning("Could not load scan cache: %s", e)
+            hash_cache = {}
+        self.scores = scan_library(path, hash_cache=hash_cache)
+        try:
+            SafeJSON.save(cache_path, hash_cache)
+        except SafeJSONError as e:
+            log.warning("Could not save scan cache: %s", e)
         _heal_references(self)
         self.config["last_directory"] = portable_path(path)
         _save_config(self.config)
@@ -215,6 +229,14 @@ class AppState:
 
     def hash_index_path(self) -> str:
         return os.path.join(self.library_dir, "_hash_index.json")
+
+    def scan_cache_path(self) -> str:
+        return os.path.join(self.library_dir, "_scan_cache.json")
+
+    def recent_path(self) -> str:
+        if self.library_dir:
+            return os.path.join(self.library_dir, "_recent.json")
+        return os.path.join(CONFIG_DIR, "_recent.json")
 
 
 def _heal_references(st: "AppState") -> None:
@@ -249,6 +271,7 @@ def _heal_references(st: "AppState") -> None:
         log.info("Detected %d renamed score(s), healing references", len(remap))
         _heal_annotation_sidecars(remap)
         _heal_setlist_paths(st, remap)
+        _heal_recent_paths(st, remap)
 
     # Save new index
     try:
@@ -281,8 +304,8 @@ def _heal_setlist_paths(st: "AppState", remap: dict[str, str]) -> None:
     """Update setlist song paths that were renamed externally."""
     data = _load_setlists()
     changed = False
-    for sl_items in data.values():
-        for item in sl_items:
+    for sl in data.values():
+        for item in sl["items"]:
             if item.get("type", "song") != "song":
                 continue
             old = item.get("path", "")
@@ -291,6 +314,19 @@ def _heal_setlist_paths(st: "AppState", remap: dict[str, str]) -> None:
                 changed = True
     if changed:
         _save_setlists(data)
+
+
+def _heal_recent_paths(st: "AppState", remap: dict[str, str]) -> None:
+    """Update recent-list filepaths that were renamed externally."""
+    data = _load_recent()
+    changed = False
+    for entry in data:
+        old = entry.get("filepath", "")
+        if old in remap:
+            entry["filepath"] = remap[old]
+            changed = True
+    if changed:
+        _save_recent(data)
 
 
 state = AppState()
@@ -331,7 +367,7 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Folio", version="2.5.8",
+    title="Folio", version="2.7.0",
     docs_url=None, redoc_url=None, lifespan=_lifespan,
 )
 
@@ -657,8 +693,8 @@ def update_score_tags(req: UpdateTagsRequest):
     if old_portable != new_portable:
         data = _load_setlists()
         changed = False
-        for sl_items in data.values():
-            for item in sl_items:
+        for sl in data.values():
+            for item in sl["items"]:
                 if item.get("type", "song") == "song" and item.get("path") == old_portable:
                     item["path"] = new_portable
                     changed = True
@@ -673,6 +709,19 @@ def update_score_tags(req: UpdateTagsRequest):
                 SafeJSON.save(state.hash_index_path(), idx)
         except SafeJSONError:
             pass
+
+        # Update recent-list entries that point to the old path
+        recent = _load_recent()
+        r_changed = False
+        for entry in recent:
+            if entry.get("filepath") == old_portable:
+                entry["filepath"] = new_portable
+                r_changed = True
+        if r_changed:
+            try:
+                _save_recent(recent)
+            except SafeJSONError:
+                pass
 
     return {"ok": True, "score": new_score.to_dict()}
 
@@ -818,15 +867,125 @@ def put_annotations(req: SaveAnnotationsRequest):
 
 
 # ---------------------------------------------------------------------------
+# Recent endpoints
+# ---------------------------------------------------------------------------
+
+
+MAX_RECENT = 50
+
+
+def _load_recent() -> list[dict]:
+    try:
+        data = SafeJSON.load(state.recent_path(), default=[])
+    except SafeJSONError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_recent(data: list[dict]) -> None:
+    SafeJSON.save(state.recent_path(), data)
+
+
+class AddRecentRequest(BaseModel):
+    path: str
+
+
+@app.get("/api/recent")
+def get_recent():
+    """Recent entries enriched with the score's current tags.
+
+    Tags are looked up live from the scanned library (matched by portable
+    path) rather than stored in the recent file, so renamed/retagged scores
+    stay accurate. Entries no longer in the library get an empty tag list.
+    """
+    by_path = {portable_path(s.filepath): s for s in state.scores}
+    recent = _load_recent()
+    for entry in recent:
+        score = by_path.get(entry.get("filepath"))
+        entry["tags"] = sorted(score.tags) if score else []
+    return {"recent": recent}
+
+
+@app.get("/api/newest")
+def get_newest(limit: int = Query(20, ge=1, le=200)):
+    """The most recently modified PDFs, newest first.
+
+    Sorted by file mtime captured at scan time. Returns the same score
+    shape as ``/api/library`` so the client can render tags and the
+    offline-cache control identically.
+    """
+    newest = sorted(
+        state.scores, key=lambda s: s.mtime, reverse=True
+    )[:limit]
+    return {
+        "scores": [s.to_dict() for s in newest],
+        "total": len(newest),
+    }
+
+
+@app.post("/api/recent")
+def add_recent(req: AddRecentRequest):
+    if not state.library_dir:
+        raise HTTPException(status_code=400, detail="No library directory set")
+    resolved = _validate_library_path(req.path)
+    pkey = portable_path(resolved)
+    score = next(
+        (s for s in state.scores
+         if portable_path(s.filepath) == pkey),
+        None,
+    )
+    if score is None:
+        raise HTTPException(status_code=404, detail="Score not in library")
+    data = _load_recent()
+    data = [e for e in data if e.get("filepath") != pkey]
+    data.insert(0, {
+        "filepath": pkey,
+        "composer": score.composer,
+        "title": score.title,
+        "content_hash": score.content_hash or "",
+        "timestamp": int(time.time() * 1000),
+    })
+    if len(data) > MAX_RECENT:
+        data = data[:MAX_RECENT]
+    _save_recent(data)
+    return {"ok": True, "count": len(data)}
+
+
+@app.delete("/api/recent")
+def clear_recent():
+    _save_recent([])
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Setlist endpoints
 # ---------------------------------------------------------------------------
 
 
+def _normalize_setlist_value(v) -> dict:
+    """Normalize a stored setlist value to {"items": [...], "shuffle": bool}.
+
+    Older versions stored each setlist as a bare list of items; this lifts
+    them into the new dict form transparently on load.
+    """
+    if isinstance(v, list):
+        return {"items": v, "shuffle": False}
+    if isinstance(v, dict):
+        items = v.get("items")
+        if not isinstance(items, list):
+            items = []
+        return {"items": items, "shuffle": bool(v.get("shuffle", False))}
+    return {"items": [], "shuffle": False}
+
+
 def _load_setlists() -> dict:
     try:
-        return SafeJSON.load(state.setlist_path(), default={})
+        raw = SafeJSON.load(state.setlist_path(), default={})
     except SafeJSONError:
         return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {name: _normalize_setlist_value(v) for name, v in raw.items()}
 
 
 def _save_setlists(data: dict) -> None:
@@ -883,7 +1042,7 @@ def _detect_cycle(
             ref = item["setlist_name"]
             if ref in visited:
                 return True
-            ref_items = data.get(ref, [])
+            ref_items = data.get(ref, {}).get("items", [])
             if _detect_cycle(data, setlist_name, ref_items, visited | {ref}):
                 return True
     return False
@@ -900,7 +1059,7 @@ def _flatten_setlist(
         return []
     _expanding = _expanding | {name}
     result: list[dict] = []
-    for item in _normalize_items(list(data[name])):
+    for item in _normalize_items(list(data[name]["items"])):
         if item.get("type") == "setlist_ref":
             result.extend(
                 _flatten_setlist(
@@ -912,16 +1071,51 @@ def _flatten_setlist(
     return result
 
 
+def _expand_for_playback(
+    data: dict, name: str, rng,
+    _expanding: frozenset[str] | None = None, _depth: int = 0,
+) -> list[dict]:
+    """Recursively expand for playback, shuffling per-setlist when flagged.
+
+    Semantics:
+      * If this setlist has shuffle=True, its top-level items are shuffled.
+      * setlist_ref items are recursively expanded; the referenced setlist's
+        own shuffle flag governs its expansion.
+    """
+    if _expanding is None:
+        _expanding = frozenset()
+    if name not in data or name in _expanding or _depth > _MAX_NESTING_DEPTH:
+        return []
+    sl = data[name]
+    items = _normalize_items(list(sl["items"]))
+    if sl.get("shuffle"):
+        rng.shuffle(items)
+    _expanding = _expanding | {name}
+    result: list[dict] = []
+    for item in items:
+        if item.get("type") == "setlist_ref":
+            result.extend(
+                _expand_for_playback(
+                    data, item["setlist_name"], rng,
+                    _expanding, _depth + 1,
+                )
+            )
+        else:
+            result.append(item)
+    return result
+
+
 @app.get("/api/setlists")
 def get_setlists():
     data = _load_setlists()
     result = []
-    for name, items in sorted(data.items()):
+    for name, sl in sorted(data.items()):
         flat = _flatten_setlist(data, name)
         result.append({
             "name": name,
-            "count": len(items),
+            "count": len(sl["items"]),
             "flat_count": len(flat),
+            "shuffle": bool(sl.get("shuffle", False)),
         })
     return {"setlists": result}
 
@@ -931,7 +1125,8 @@ def get_setlist(name: str):
     data = _load_setlists()
     if name not in data:
         raise HTTPException(status_code=404, detail="Setlist not found")
-    items = _normalize_items(list(data[name]))
+    sl = data[name]
+    items = _normalize_items(list(sl["items"]))
     enriched: list[dict] = []
     for item in items:
         if item.get("type") == "setlist_ref":
@@ -941,7 +1136,11 @@ def get_setlist(name: str):
             enriched.append({**item, "exists": exists, "flat_count": len(flat)})
         else:
             enriched.append(item)
-    return {"name": name, "items": enriched}
+    return {
+        "name": name,
+        "items": enriched,
+        "shuffle": bool(sl.get("shuffle", False)),
+    }
 
 
 @app.get("/api/setlists/{name}/flat")
@@ -951,6 +1150,20 @@ def get_setlist_flat(name: str):
     if name not in data:
         raise HTTPException(status_code=404, detail="Setlist not found")
     songs = _flatten_setlist(data, name)
+    return {"name": name, "songs": songs}
+
+
+@app.get("/api/setlists/{name}/playback")
+def get_setlist_playback(name: str):
+    """Return song list with shuffle applied recursively per shuffle flags.
+
+    Each call randomizes fresh; subsequent calls return a different order
+    when any setlist in the chain has shuffle=True.
+    """
+    data = _load_setlists()
+    if name not in data:
+        raise HTTPException(status_code=404, detail="Setlist not found")
+    songs = _expand_for_playback(data, name, random.Random())
     return {"name": name, "songs": songs}
 
 
@@ -964,7 +1177,7 @@ def create_setlist(req: CreateSetlistRequest):
     data = _load_setlists()
     if name in data:
         raise HTTPException(status_code=409, detail="Setlist already exists")
-    data[name] = []
+    data[name] = {"items": [], "shuffle": False}
     _save_setlists(data)
     return {"ok": True, "name": name}
 
@@ -989,9 +1202,23 @@ def update_setlist(name: str, req: UpdateSetlistItemsRequest):
         raise HTTPException(
             status_code=400, detail="Circular setlist reference detected"
         )
-    data[name] = items
+    data[name]["items"] = items
     _save_setlists(data)
     return {"ok": True}
+
+
+class SetShuffleRequest(BaseModel):
+    shuffle: bool
+
+
+@app.post("/api/setlists/{name}/shuffle")
+def set_setlist_shuffle(name: str, req: SetShuffleRequest):
+    data = _load_setlists()
+    if name not in data:
+        raise HTTPException(status_code=404, detail="Setlist not found")
+    data[name]["shuffle"] = bool(req.shuffle)
+    _save_setlists(data)
+    return {"ok": True, "shuffle": data[name]["shuffle"]}
 
 
 @app.delete("/api/setlists/{name}")
@@ -1020,8 +1247,8 @@ def rename_setlist(name: str, req: RenameSetlistRequest):
     for k, v in data.items():
         new_data[new_name if k == name else k] = v
     # Cascade: update setlist_ref items in all setlists that reference old name
-    for items in new_data.values():
-        for item in items:
+    for sl in new_data.values():
+        for item in sl["items"]:
             if item.get("type") == "setlist_ref" and item.get("setlist_name") == name:
                 item["setlist_name"] = new_name
     _save_setlists(new_data)

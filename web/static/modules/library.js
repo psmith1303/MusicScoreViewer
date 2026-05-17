@@ -12,7 +12,6 @@ import { esc } from "./utils.js";
 import { showView } from "./views.js";
 import { openScore, cleanupScore } from "./viewer.js";
 import { CACHE_AVAILABLE, isCached, toggleCache, refreshCacheStatus } from "./cache.js";
-import { healRecentList } from "./recent.js";
 
 // ---------------------------------------------------------------------------
 // Load and render
@@ -45,7 +44,6 @@ export async function loadLibrary() {
     renderTags();
     libraryStatus.textContent = `${data.total} scores`;
     if (CACHE_AVAILABLE) refreshCacheStatus();
-    healRecentList(s.scores);
   } catch (err) {
     if (gen !== _loadGen) return;
     libraryStatus.textContent = `Error: ${err.message}`;
@@ -172,7 +170,22 @@ export function initLibraryEvents() {
     s.sortCol = "composer";
     s.sortDesc = false;
     updateSortHeaders();
-    await loadLibrary();
+
+    btnReset.disabled = true;
+    const prevLabel = btnReset.textContent;
+    btnReset.textContent = "Rescanning…";
+    libraryStatus.innerHTML = '<span class="spinner"></span><span>Rescanning library…</span>';
+
+    try {
+      await api("/api/library/rescan", { method: "POST" });
+      await loadLibrary();
+    } catch (err) {
+      libraryStatus.textContent = `Rescan failed: ${err.message}`;
+    } finally {
+      btnReset.disabled = false;
+      btnReset.textContent = prevLabel;
+    }
+
     document.getElementById("library-table-wrap").scrollTop = 0;
   });
 

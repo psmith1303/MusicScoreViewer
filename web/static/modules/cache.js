@@ -162,15 +162,15 @@ export async function cacheLibrary() {
 let _cachedPaths = new Set();
 let _pinnedPaths = new Set();
 
-export async function refreshCacheStatus() {
+export async function refreshCacheStatus(tbody = libraryBody) {
   const status = await getCacheStatus();
   _cachedPaths = status.cached;
   _pinnedPaths = status.pinned;
-  updateCacheButtons();
+  updateCacheButtons(tbody);
 }
 
-function updateCacheButtons() {
-  const rows = libraryBody.querySelectorAll("tr");
+function updateCacheButtons(tbody = libraryBody) {
+  const rows = tbody.querySelectorAll("tr");
   for (const row of rows) {
     const filepath = row.dataset.filepath;
     if (!filepath) continue;
